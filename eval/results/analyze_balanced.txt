@@ -1,0 +1,18 @@
+================================================
+  WITHIN-DATASET FORECAST AUC  (trajectories_balanced.json, n=90)
+================================================
+
+  [ALL]  n=90  success=27/90
+     k  AUC task  AUC trace    lift
+     5     0.624      0.737  +0.113
+    10     0.703      0.733  +0.030
+
+  [fanout ONLY]  n=50  success=11/50
+     k  AUC task  AUC trace    lift
+     5     0.470      0.561  +0.091
+    10     0.550      0.449  -0.101
+
+  [musique ONLY]  n=40  success=16/40
+     k  AUC task  AUC trace    lift
+     5     0.721      0.827  +0.105
+    10     0.758      0.876  +0.118

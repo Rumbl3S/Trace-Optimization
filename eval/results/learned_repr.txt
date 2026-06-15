@@ -1,0 +1,25 @@
+====================================================
+  LEARNED REPRESENTATION TEST  (trajectories_balanced.json)
+====================================================
+
+  [ALL]  n=90  success=27/90
+    raw kNN@10       0.733
+    PCA kNN@10       0.761
+    logreg(PCA)      0.805
+    LDA(PCA)         0.810
+
+  [fanout ONLY]  n=50  success=11/50
+    raw kNN@10       0.449
+    PCA kNN@10       0.455
+    logreg(PCA)      0.578
+    LDA(PCA)         0.490
+
+  [musique ONLY]  n=40  success=16/40
+    raw kNN@10       0.876
+    PCA kNN@10       0.831
+    logreg(PCA)      0.789
+    LDA(PCA)         0.760
+
+====================================================
+READ: learned beats 'raw kNN@10' by > ~0.03 -> representation learning
+helps. Otherwise off-the-shelf embeddings are the ceiling at this n.
