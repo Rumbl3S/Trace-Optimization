@@ -210,9 +210,32 @@ fan-out signal, and cross-task transfer beats chance. Neither is *strong* yet (0
 so the path to a general forecaster is: true per-item labels + more task families + more
 data, not a new mechanism.
 
+## 8c. Per-component forecasting (`eval/component_forecast.py`) — the fan-out fix lands
+
+GENERIC pipeline (no benchmark logic): `decompose → attempt → verify → forecast`. The unit
+of prediction is a single **checkable component** of a task; the only task-specific input is
+a **pluggable verifier** (here an LLM gold-judge; in deployment, the user's own check).
+
+| slice | AUC | note |
+|---|---|---|
+| **FanOutQA within** | **0.846** | was ~0.45 (chance) at the task level |
+| MuSiQue within | 0.666 | only ~2 components/task, n=45, judge-noise |
+| **FanOutQA ← MuSiQue** (transfer) | **0.732** | up from task-level 0.61 |
+| MuSiQue ← FanOutQA (transfer) | 0.650 | |
+
+**This is the payoff.** Decomposing into checkable units turned fan-out from unpredictable
+(0.45) to highly predictable (**0.85**) — confirming the diagnosis that the *binary
+task-level label*, not the trace, was the blocker. It is **fully generic** (same code on
+both datasets; swap the verifier for any task) and **transfers across task types better
+than whole-task forecasting** (0.65–0.73). Caveats: MuSiQue-within is weak (few components,
+n=45); labels are LLM-judge generated (noisy); single run.
+
+The generalizable recipe is now empirically grounded: **forecast per checkable component,
+not per task; bring your own verifier; everything else is task-agnostic.**
+
 ## 9. Status
 
-MVP + 3 ablations + generalizability pass complete. Code: `forecast.py`,
-`eval/{mvp_failure_forecast,ablation_reasoning,gen_balanced,analyze,learned_repr,generalize}.py`,
-tests 7/7. Next: true per-item fan-out labels (regenerate decomposed) + add non-QA task
-families to test transfer breadth.
+MVP + 3 ablations + generalizability + per-component complete. Code: `forecast.py`,
+`eval/{mvp_failure_forecast,ablation_reasoning,gen_balanced,analyze,learned_repr,generalize,
+component_forecast}.py`, tests 7/7. Next: add a non-QA task family (coding/tool-use) to test
+transfer breadth, and turn forecasts into a token/latency-saving intervention policy.
