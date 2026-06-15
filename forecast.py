@@ -44,6 +44,44 @@ def knn_predict(vecs: List[Sequence[float]], labels: List[int], k: int) -> List[
     return preds
 
 
+def knn_predict_cross(train_vecs, train_vals, test_vecs, k: int) -> List[float]:
+    """Predict each TEST point from its k nearest TRAIN neighbours (cosine). Used for
+    leave-one-task-type-out: train on some task families, predict an unseen one."""
+    preds = []
+    for tv in test_vecs:
+        sims = sorted(((cosine(tv, trv), v) for trv, v in zip(train_vecs, train_vals)),
+                      key=lambda t: t[0], reverse=True)[:k]
+        preds.append(sum(v for _, v in sims) / max(1, len(sims)))
+    return preds
+
+
+def _ranks(xs: Sequence[float]) -> List[float]:
+    order = sorted(range(len(xs)), key=lambda i: xs[i])
+    ranks = [0.0] * len(xs)
+    i = 0
+    while i < len(xs):
+        j = i
+        while j + 1 < len(xs) and xs[order[j + 1]] == xs[order[i]]:
+            j += 1
+        avg = (i + j) / 2.0
+        for t in range(i, j + 1):
+            ranks[order[t]] = avg
+        i = j + 1
+    return ranks
+
+
+def spearman(a: Sequence[float], b: Sequence[float]) -> float:
+    """Rank correlation — does predicted *degree of success* track the actual score?
+    Robust where a binary AUC is uninformative (e.g. partial-coverage fan-out)."""
+    ra, rb = _ranks(a), _ranks(b)
+    n = len(a)
+    ma, mb = sum(ra) / n, sum(rb) / n
+    cov = sum((x - ma) * (y - mb) for x, y in zip(ra, rb))
+    va = math.sqrt(sum((x - ma) ** 2 for x in ra))
+    vb = math.sqrt(sum((y - mb) ** 2 for y in rb))
+    return cov / (va * vb + 1e-12)
+
+
 def auc(labels: List[int], scores: List[float]) -> float:
     """ROC-AUC via Mann-Whitney: P(score_pos > score_neg), ties = 0.5. 0.5 == chance.
     Returns nan if a class is missing."""

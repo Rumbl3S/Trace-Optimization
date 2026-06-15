@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import forecast
-from forecast import auc, knn_predict, cosine
+from forecast import auc, knn_predict, knn_predict_cross, spearman, cosine
 
 
 def test_auc_perfect_chance_and_reversed():
@@ -34,6 +34,19 @@ def test_knn_predictions_are_bounded_probabilities():
     preds = knn_predict(vecs, labels, k=2)
     assert len(preds) == len(vecs)
     assert all(0.0 <= p <= 1.0 for p in preds)
+
+
+def test_spearman_monotonic_and_inverse():
+    assert abs(spearman([1, 2, 3, 4], [10, 20, 30, 40]) - 1.0) < 1e-9
+    assert abs(spearman([1, 2, 3, 4], [40, 30, 20, 10]) + 1.0) < 1e-9
+
+
+def test_knn_cross_predicts_from_train_set():
+    train_v = [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9]]
+    train_y = [1, 1, 0, 0]
+    test_v = [[0.95, 0.05], [0.05, 0.95]]      # near class-1 cluster, near class-0 cluster
+    preds = knn_predict_cross(train_v, train_y, test_v, k=1)
+    assert preds[0] > preds[1]                 # first looks like success, second like failure
 
 
 def test_cosine_basic():

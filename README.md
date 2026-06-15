@@ -178,8 +178,41 @@ label) and fix the failure definition, and (b) get to hundreds–thousands of tr
 so representation learning can be tested honestly. The idea isn't dead — it's **proven on
 one task family, unproven on the one that matters most for cost.**
 
+## 8b. Generalizability pass (`eval/generalize.py`) — both fixes show positive signal
+
+Two no-new-data fixes aimed at "works for anything":
+
+**A) Continuous target (per-component proxy)** — predict the coverage *score*, not binary
+pass/fail. The 0.5 cutoff was hiding fan-out signal:
+
+| dataset | binary AUC | continuous Spearman |
+|---|---|---|
+| fanout | 0.449 (chance) | **+0.191** (signal appears!) |
+| musique | 0.876 | +0.662 |
+
+→ Fan-out's degree-of-success **is** weakly predictable once we stop binarising — the
+cutoff, not the trace, was the problem. Weak (0.19) but no longer chance. Validates the
+per-component direction; a true per-*item* label should sharpen it.
+
+**B) Leave-one-task-type-out transfer** — train on one task family, predict an UNSEEN one:
+
+| predict | from | transfer AUC | Spearman |
+|---|---|---|---|
+| fanout | musique only | **0.605** | +0.034 |
+| musique | fanout only | **0.612** | +0.106 |
+
+→ A forecaster trained on one task type predicts a **different, unseen** type at AUC ~0.61
+(> 0.5 chance). So the failure signal is **partially transferable** — it isn't memorising
+one dataset. Generalises, but weakly (0.61 vs within-task 0.85).
+
+**Read:** both "generalizable" levers work directionally — continuous targets surface
+fan-out signal, and cross-task transfer beats chance. Neither is *strong* yet (0.19 / 0.61),
+so the path to a general forecaster is: true per-item labels + more task families + more
+data, not a new mechanism.
+
 ## 9. Status
 
-MVP + 3 ablations complete (this section). Code: `forecast.py`, `eval/{mvp_failure_forecast,
-ablation_reasoning,gen_balanced,analyze,learned_repr}.py`, tests 5/5. Next: fix the fan-out
-failure label, then scale trajectory count.
+MVP + 3 ablations + generalizability pass complete. Code: `forecast.py`,
+`eval/{mvp_failure_forecast,ablation_reasoning,gen_balanced,analyze,learned_repr,generalize}.py`,
+tests 7/7. Next: true per-item fan-out labels (regenerate decomposed) + add non-QA task
+families to test transfer breadth.
