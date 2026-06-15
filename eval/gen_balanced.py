@@ -19,20 +19,15 @@ HERE = os.path.dirname(__file__)
 RS = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path[:0] = [RS, os.path.join(RS, "eval"), os.path.abspath(os.path.join(HERE, ".."))]
 
-import numpy as np
 import llm
 import adaptive
 import run_fanoutqa as fq
 import run_musique as mu
 from _common import score as _score
 from demo_embed_compare import haiku, _build_openai
+from pipeline import attempt, make_retriever
 
 llm._ensure_api_key()
-
-TRACE_PROMPT = (
-    "{ctx}\n\nTask: {task}\n\nWork through this step by step. As you go, explicitly note "
-    "WHAT specific information you look for, what you FIND, and what you CANNOT find in "
-    "the context. Then give your final answer on the last line as 'ANSWER: ...'.")
 
 
 def main():
@@ -43,22 +38,6 @@ def main():
     args = ap.parse_args()
 
     embed = _build_openai()
-
-    def embed_retrieve(task, chunks, words):
-        chunks = [c for c in chunks if c.strip()]
-        if not chunks:
-            return ""
-        cv = np.asarray(embed(chunks), dtype="float32")
-        qv = np.asarray(embed([task]), dtype="float32")[0]
-        order = np.argsort(-(cv @ qv))
-        picked, used = [], 0
-        for j in order:
-            w = len(chunks[j].split())
-            if picked and used + w > words:
-                break
-            picked.append(chunks[j]); used += w
-        return "\n\n".join(picked)
-
     recs = []
     fitems = [(r, "fanout", lambda a, rec: fq.score(a, rec)["loose"], True) for r in fq.load(args.fanout)]
     mitems = [(r, "musique", lambda a, rec: _score(a, rec.gold)["contains"], False) for r in mu.load(args.musique)]
@@ -67,9 +46,11 @@ def main():
 
     for i, (rec, src, scorer, use_embed) in enumerate(items):
         try:
-            ctx = (embed_retrieve(rec.task, rec.context_chunks, args.words) if use_embed
-                   else adaptive._select_for_single(rec.task, rec.context_chunks, 800))
-            trace, _ = haiku(TRACE_PROMPT.format(ctx=ctx, task=rec.task))
+            if use_embed:
+                ctx = make_retriever(rec.context_chunks, embed)(rec.task, args.words)
+            else:
+                ctx = adaptive._select_for_single(rec.task, rec.context_chunks, 800)
+            trace = attempt(rec.task, ctx, haiku)
             sc = scorer(trace, rec)
             recs.append({"task": rec.task, "src": src, "score": sc,
                          "label": 1 if sc >= 0.5 else 0, "trace": trace})

@@ -3,7 +3,7 @@
 The one question this answers: do *trace embeddings* carry outcome signal? i.e. can a
 trajectory's nearest neighbours (in embedding space) predict whether it succeeds, better
 than chance and better than knowing the task alone? Pure functions so they can be unit-
-tested offline; the real run lives in eval/mvp_failure_forecast.py.
+tested offline; the experiments that use them live in eval/.
 """
 from __future__ import annotations
 

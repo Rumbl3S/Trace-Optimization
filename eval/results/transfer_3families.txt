@@ -1,0 +1,20 @@
+============================================================
+  GENERALIZABILITY  (trajectories_3fam.json, n=140)
+============================================================
+
+  [A] CONTINUOUS target vs binary (within-dataset, k=10)
+  dataset     binary AUC   cont. Spearman
+  fanout           0.449            0.191
+  gsm8k            0.351           -0.157
+  musique          0.882            0.675
+       (Spearman > 0 means degree-of-success IS predictable even when the
+        binary 0.5 cutoff looks like chance — the per-component fix.)
+
+  [B] LEAVE-ONE-TASK-TYPE-OUT (train on others, predict unseen type, k=10)
+  predict   from         transfer AUC   Spearman
+  fanout    others              0.606      0.031
+  gsm8k     others              0.493     -0.023
+  musique   others              0.660      0.186
+       (AUC > 0.5 / Spearman > 0 across types => it generalizes to unseen tasks.)
+
+============================================================

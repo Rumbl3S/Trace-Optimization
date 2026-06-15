@@ -1,60 +1,40 @@
 # CLAUDE.md — trace_use working context
 
-Read this before editing anything in `trace_use/`. Full rationale and plan are in
-[`README.md`](README.md); this is the operational map.
+Read before editing here. Full rationale, results, and API are in [`README.md`](README.md);
+this is the operational map.
 
-## What this branch is
-Experiment (`trace_use` branch only): use a **failed agent attempt's trace** — what it
-explored, ruled out, found promising, still can't answer — as a **signed retrieval prior**
-for the next attempt, instead of discarding the attempt as "wrong."
+## What this is
+Branch-scoped research module: forecast agent failure from execution traces, so retries/
+verification are spent only where needed. Built on the parent `../` pipeline (imports up;
+the parent never imports this).
 
-## The one thing to keep straight
-The bet is the **negative signal** (ruled-out regions → prune) plus a **persistent
-exploration map** across attempts. The parent pipeline already uses the *positive* /
-*unknown* signals (`AREA:` hints → gap retrieval). Do **not** re-pitch those as the
-contribution — they exist. New value = pruning dead ends + cross-attempt convergence.
+## The core claim (and the line to hold)
+Forecast per **checkable component**, not per whole task — that is what made fan-out
+predictable (0.45 → 0.85) and what transfers across task types. The trace was never the
+problem; the coarse pass/fail label was. Don't regress to whole-task labels.
 
-## The hypothesis we must falsify
-Trace-guided retry beats **just-retrieve-more at equal token budget** (and beats
-blind retry). If it only ties "more evidence," the trace adds nothing — that is the kill
-condition. Always evaluate against the add-more-evidence baseline, never only vs naive retry.
+## Invariants
+- **Generic by construction.** The method (`pipeline.py`) has zero dataset logic. The only
+  task-specific input is a `Verifier`. Keep it that way — no benchmark-format parsing in
+  `pipeline.py` or `forecast.py`.
+- **Compare honestly.** AUC vs 0.5 chance; report within-dataset *and* leave-one-task-type-out
+  (the real generalization test). Temp-0 still wobbles ±1 item — don't over-read small deltas.
+- **Negative results stay.** GSM8K-too-easy, learned-repr-doesn't-help, intervention-is-
+  failure-rate-dependent are findings, not failures. Keep them in the README.
 
-## Invariants / guardrails
-- **Negative = soft.** Ruled-out units get a similarity *penalty*, never a hard exclusion —
-  wrong ≠ dead end (an agent can check the right place and still fail). Hard-excluding can
-  prune the answer.
-- **Log what it actually saw**, not only the self-report. The ground-truth trace is the set
-  of retrieved units; the LLM's verbal "I checked X" is a noisy secondary signal.
-- **Equal-budget comparisons only.** Token accounting must include trace-mining cost.
-- Keep all new code in this folder. Reuse parent infra by importing upward; never edit
-  `../adaptive.py` to serve this experiment (fork behavior here instead).
+## Layout
+- `pipeline.py` — public API: `decompose / attempt / verify / make_retriever / Forecaster`.
+- `forecast.py` — primitives: `knn_predict`, `knn_predict_cross`, `auc`, `spearman`.
+- `eval/` — the experiment ledger (each script = one README finding); data + logs in
+  `eval/results/`.
+- `tests/` — offline gates (stubbed agent/embedder, no API key): `test_forecast`, `test_pipeline`.
 
 ## Reused parent infra (import, don't copy)
-- `../adaptive.py` — `AdaptiveSolver`, retrieval (`_cluster_evidence`, `_embed_top`,
-  `_segment`), audit, `memo`.
-- `../eval/run_fanoutqa.py`, `../eval/run_musique.py` — dataset loaders + scorers.
-- `../eval/demo_embed_compare.py` — `haiku` (temp=0 agent), `_build_openai` (embedder).
-- `../tokenmeter.py` — metering / relevance.
-
-## Datasets & why
-- **FanOutQA** (dispersed, multi-doc) — primary; this is where there's territory to prune.
-- **MuSiQue** (multi-hop) — secondary; tests whether promising-lead chaining helps.
-
-## Build order (see README §5)
-0. Harness + **trace-oracle ceiling** (gold-labeled helpful/dead-end units). Go/no-go.
-1. `TraceRecord` capture (retrieved units + `CHECKED:`/`OPEN:` self-report).
-2. Trace → signed retrieval prior (negative penalty + positive query expansion).
-3. Guided-retry loop (trace-directed expansion).
-4. Eval vs {blind-retry, add-more-evidence} at equal budget; ablate ±signals.
-
-## Planned files (none yet — scaffolding stage)
-- `trace.py` — `TraceRecord`, capture, signed-prior construction.
-- `trace_solver.py` — guided-retry loop wrapping the parent solver.
-- `eval/oracle_ceiling.py`, `eval/trace_vs_more_evidence.py` — the decisive experiments.
-- `tests/` — offline gates (stubbed agents), mirroring the parent's test style.
+`../adaptive.py`, `../eval/{run_fanoutqa,run_musique}.py`, `../eval/demo_embed_compare.py`
+(`haiku` temp-0 agent, `_build_openai` embedder), `../eval/_common.py` (scorers).
 
 ## Gotchas
-- Temp=0 still wobbles ±1 part on the API — average runs before trusting small deltas
-  (a lesson from the parent project).
-- "Accuracy ∝ evidence ∝ tokens" is the floor every parent experiment hit; trace-use only
-  matters if it removes *waste*, not by adding evidence. Hold that line.
+- Evals call `llm._ensure_api_key()` at import and need `ANTHROPIC_API_KEY` + `OPENAI_API_KEY`.
+- "Accuracy ∝ evidence ∝ tokens" is the parent's floor and the reason this project exists —
+  trace_use predicts *where* to spend, it does not beat that floor.
+- Run `pytest tests/ -q` before committing; both test files must stay green.

@@ -17,7 +17,8 @@ from forecast import knn_predict, auc
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "results", "trajectories.json")
+    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
+        HERE, "results", "trajectories_balanced.json")
     recs = json.load(open(path))
     embed = _build_openai()
     labels = [r["label"] for r in recs]

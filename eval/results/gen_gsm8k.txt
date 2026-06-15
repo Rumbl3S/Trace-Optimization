@@ -1,0 +1,7 @@
+  [10/50] done
+  [20/50] done
+  [30/50] done
+  [40/50] done
+  [50/50] done
+
+gsm8k: success 47/50 = 0.94  -> /Users/raghav/agents/Agents/regime_selector/trace_use/eval/results/trajectories_gsm8k.json
