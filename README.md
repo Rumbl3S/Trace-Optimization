@@ -4,27 +4,29 @@
 > and couldn't answer — predicts failure on *similar* future work. Use that to **spend
 > retries/verification only where they're needed**, instead of everywhere or nowhere.
 
-A self-contained research module on top of [`../`](../) (the regime_selector pipeline). It
-reuses that project's agents, datasets, and embedders; it adds a **prediction layer** that
-learns across runs. Nothing in the parent imports this folder.
+A **self-contained** toolkit (no external project dependencies). It began as a research
+spin-off from a token-efficiency project — see *Why* below — and vendors everything it
+needs: a Haiku agent + OpenAI embedder (`agents.py`), the benchmark loaders (`bench/`), and
+a couple of helpers (`_util.py`). The product surface is `pipeline.py`; `forecast.py` holds
+the primitives.
 
 ---
 
 ## Why we shifted to this
 
-The parent project chased **token efficiency** for a single agent solve (single → audit →
+Our prior work chased **token efficiency** for a single agent solve (single → audit →
 gap-fill → compose). It worked, then hit a wall we proved repeatedly: **accuracy ∝ evidence
 ∝ tokens.** On dispersed tasks you cannot cut tokens without losing accuracy — a full-context
-call scored 0.72 at 92k tokens; our retrieval pipeline 0.48 at 34k. Cheaper *or* more
+call scored 0.72 at 92k tokens; the retrieval pipeline 0.48 at 34k. Cheaper *or* more
 accurate, not both. Every lever (tight caps, dedup, distillation) lived on that one curve.
 
 So we changed the **axis**. Instead of making *one* attempt cheaper, **learn across attempts**:
 treat each run's trace as data, predict which work is about to fail, and pay for a fix only
 there. That turns "optimize this solve" into "optimize the *workflow*."
 
-**How it differs from the parent:** the parent optimizes *within* a single attempt
-(retrieval, composition). `trace_use` is a *meta-layer across* attempts — it doesn't make a
-solve better, it decides **where to spend effort** by forecasting failure.
+**How it differs:** the prior work optimized *within* a single attempt (retrieval,
+composition). This is a *meta-layer across* attempts — it doesn't make a solve better, it
+decides **where to spend effort** by forecasting failure.
 
 ---
 
@@ -91,8 +93,12 @@ only on the risky ones — everything else is task-agnostic.**
 
 | path | role |
 |---|---|
-| `pipeline.py` | the importable API: `decompose / attempt / verify / Forecaster / make_retriever` |
+| `pipeline.py` | the importable API: `decompose / attempt / verify / Forecaster / make_retriever` + auto-verifiers (`self_judge`, `self_consistency`) |
 | `forecast.py` | low-level primitives: k-NN (LOO + cross), ROC-AUC, Spearman |
+| `agents.py` | vendored Haiku agent + OpenAI embedder (lazy clients, keys from env/`.env`) |
+| `bench/` | vendored benchmark loaders + scorers (FanOutQA, MuSiQue) |
+| `_util.py` | vendored helper (`select_for_single`) |
+| `requirements.txt` | `anthropic openai numpy datasets python-dotenv pytest` |
 | `eval/component_forecast.py` | **headline** — per-component forecasting, within + transfer |
 | `eval/gen_balanced.py`, `gen_gsm8k.py` | generate labeled trajectories (QA retrieval / math) |
 | `eval/analyze.py`, `generalize.py` | within-dataset and leave-one-task-type-out AUC |
@@ -102,8 +108,12 @@ only on the risky ones — everything else is task-agnostic.**
 | `eval/results/` | raw logs + saved trajectory/component datasets |
 | `tests/` | offline gates (no API key): `test_forecast.py`, `test_pipeline.py` |
 
-Run tests: `python -m pytest tests/ -q`. Evals need `ANTHROPIC_API_KEY` + `OPENAI_API_KEY`
-(see `../CLAUDE.md` / `../README.md`).
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -q                 # offline gates, no API key
+export ANTHROPIC_API_KEY=...  OPENAI_API_KEY=...
+python eval/component_forecast.py --tasks 18 --max-components 6   # the headline experiment
+```
 
 ---
 

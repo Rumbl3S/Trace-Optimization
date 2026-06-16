@@ -19,14 +19,11 @@ import re
 import sys
 
 HERE = os.path.dirname(__file__)
-RS = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path[:0] = [RS, os.path.join(RS, "eval"), os.path.abspath(os.path.join(HERE, ".."))]
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 
-import llm
 from datasets import load_dataset
-from demo_embed_compare import haiku
+from agents import haiku
 
-llm._ensure_api_key()
 
 PROMPT = ("Answer this quickly using mental math — do NOT write out detailed step-by-step "
           "work. Give a brief one-line justification, then 'ANSWER: <number>'.\n\n"

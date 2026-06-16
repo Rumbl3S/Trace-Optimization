@@ -19,11 +19,10 @@ import os
 import sys
 
 HERE = os.path.dirname(__file__)
-RS = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path[:0] = [RS, os.path.join(RS, "eval"), os.path.abspath(os.path.join(HERE, ".."))]
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 
 import numpy as np
-from demo_embed_compare import _build_openai
+from agents import _build_openai
 from forecast import knn_predict, auc
 
 

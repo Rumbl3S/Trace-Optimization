@@ -15,17 +15,14 @@ import os
 import sys
 
 HERE = os.path.dirname(__file__)
-RS = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path[:0] = [RS, os.path.join(RS, "eval"), os.path.abspath(os.path.join(HERE, ".."))]
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 
-import llm
-import run_fanoutqa as fq
-import run_musique as mu
-from demo_embed_compare import haiku, _build_openai
+from bench import run_fanoutqa as fq
+from bench import run_musique as mu
+from agents import haiku, _build_openai
 from pipeline import decompose, attempt, gold_judge, make_retriever
 from forecast import knn_predict, knn_predict_cross, auc
 
-llm._ensure_api_key()
 
 
 def main():

@@ -16,18 +16,15 @@ import statistics
 import sys
 
 HERE = os.path.dirname(__file__)
-RS = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path[:0] = [RS, os.path.join(RS, "eval"), os.path.abspath(os.path.join(HERE, ".."))]
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..")))
 
-import llm
-import adaptive
-import run_fanoutqa as fq
-import run_musique as mu
-from _common import score as _score
-from demo_embed_compare import haiku, _build_openai
+import _util
+from bench import run_fanoutqa as fq
+from bench import run_musique as mu
+from bench._common import score as _score
+from agents import haiku, _build_openai
 from pipeline import attempt, make_retriever
 
-llm._ensure_api_key()
 
 
 def main():
@@ -49,7 +46,7 @@ def main():
             if use_embed:
                 ctx = make_retriever(rec.context_chunks, embed)(rec.task, args.words)
             else:
-                ctx = adaptive._select_for_single(rec.task, rec.context_chunks, 800)
+                ctx = _util.select_for_single(rec.task, rec.context_chunks, 800)
             trace = attempt(rec.task, ctx, haiku)
             sc = scorer(trace, rec)
             recs.append({"task": rec.task, "src": src, "score": sc,
