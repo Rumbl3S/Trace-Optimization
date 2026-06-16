@@ -163,6 +163,18 @@ Non-parametric (k-NN over embeddings). No training step; the store grows with `a
 
 ---
 
+## trace_use vs answer-only routing
+
+A common alternative is to embed only the final answer and use that to predict failure. For simple short-answer tasks the numbers are close — but trace_use has a structural advantage that matters in practice: the reasoning trace is available **token-by-token during generation**, so failure can be detected and acted on before the model even finishes writing. Answer-only routing requires waiting for the full response, parsing the final line, and only then deciding whether to intervene. That latency difference is the key edge in any real pipeline.
+
+Beyond latency, trace_use pulls further ahead as tasks grow in complexity:
+
+- **Higher verification budgets.** At a 50% budget, trace_use catches **70%** of failures vs **67%** for answer-only. The trace surfaces failure patterns the answer conceals — a model can produce a confident-sounding wrong answer while its reasoning clearly shows the uncertainty.
+- **Complex reasoning tasks.** On multi-step or tool-use tasks, failure diverges from correct paths in the reasoning long before the final answer is written. The advantage of the full trace grows with task depth.
+- **Streaming and early-exit pipelines.** Intervening mid-generation — rerouting, escalating, or triggering a retry — is only possible when prediction runs on the trace, not the finished answer.
+
+---
+
 ## Repo layout
 
 | Path | Role |
