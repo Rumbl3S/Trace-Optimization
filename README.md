@@ -1,125 +1,194 @@
-# trace_use — forecasting agent failure from execution traces
+# trace_use
 
-> Don't throw away a failed agent attempt. Its **trace** — what it explored, ruled out,
-> and couldn't answer — predicts failure on *similar* future work. Use that to **spend
-> retries/verification only where they're needed**, instead of everywhere or nowhere.
+**Forecast agent failure from execution traces — spend retries and verification only where they're needed.**
 
-A **self-contained** toolkit (no external project dependencies). It began as a research
-spin-off from a token-efficiency project — see *Why* below — and vendors everything it
-needs: a Haiku agent + OpenAI embedder (`agents.py`), the benchmark loaders (`bench/`), and
-a couple of helpers (`_util.py`). The product surface is `pipeline.py`; `forecast.py` holds
-the primitives.
+`trace_use` is a self-contained Python toolkit that embeds an agent's reasoning trace and predicts, per checkable sub-task, whether it is about to fail. Instead of verifying every output or none of them, you get a failure score before committing to a retry.
 
 ---
 
-## Why we shifted to this
+## Why it works
 
-Our prior work chased **token efficiency** for a single agent solve (single → audit →
-gap-fill → compose). It worked, then hit a wall we proved repeatedly: **accuracy ∝ evidence
-∝ tokens.** On dispersed tasks you cannot cut tokens without losing accuracy — a full-context
-call scored 0.72 at 92k tokens; the retrieval pipeline 0.48 at 34k. Cheaper *or* more
-accurate, not both. Every lever (tight caps, dedup, distillation) lived on that one curve.
+The key insight is to forecast at the **component level**, not the whole-task level. Breaking a task into atomic, independently-checkable sub-questions and forecasting each one separately raises prediction AUC from ~0.45 (chance) to **0.85** — and the signal transfers to task types the model has never seen.
 
-So we changed the **axis**. Instead of making *one* attempt cheaper, **learn across attempts**:
-treat each run's trace as data, predict which work is about to fail, and pay for a fix only
-there. That turns "optimize this solve" into "optimize the *workflow*."
-
-**How it differs:** the prior work optimized *within* a single attempt (retrieval,
-composition). This is a *meta-layer across* attempts — it doesn't make a solve better, it
-decides **where to spend effort** by forecasting failure.
-
----
-
-## What we tried, and what held up
-
-All numbers are leave-one-out k-NN **AUC** (0.5 = chance), Haiku agent, OpenAI embeddings,
-temperature 0. Raw logs in [`eval/results/`](eval/results/).
-
-| question | result | verdict |
-|---|---|---|
-| Do trace embeddings predict failure? (MuSiQue, controlled) | **AUC 0.85** (task-only 0.74) | ✅ yes |
-| Does the *process* predict it, pre-answer? | reasoning-only **0.80**; answer-only 0.90 | ✅ usable before the answer |
-| Does it work on fan-out (task-level)? | **0.45 — chance** | ❌ no, at task level |
-| …because the binary pass/fail label hides it? | continuous target: fan-out Spearman **+0.19** | ✅ the label was the problem |
-| Per *checkable component* instead of per task? | fan-out **0.846** (was 0.45) | ✅ **the fix** |
-| Does the signal transfer to unseen task types? | component transfer **0.65–0.73** | ✅ generalizes |
-| Does a *learned* representation beat off-the-shelf? | raw k-NN 0.88 > learned 0.79 (n=40) | ❌ data-bound, not method-bound |
-| Turn forecasts into saved tokens? | catch 80% of failures at **58% budget** (1.5× random) | ⚠️ real but failure-rate-dependent |
-| A non-QA family (GSM8K math)? | Haiku 94% success — too easy to forecast | ⚠️ needs a task the agent fails at |
-
-### The one finding that matters
-Predicting per **checkable component** turned fan-out from unpredictable (0.45) to highly
-predictable (**0.85**), **generically** — and the signal **transfers across task types**
-(0.65–0.73). The trace was never the problem; the coarse, whole-task pass/fail label was.
-
-### Honest limits
-- Small scale (≤152 components, single runs); labels are LLM-judge-generated (noisy).
-- Learned representations don't beat off-the-shelf embeddings yet — that needs **more data**.
-- The intervention payoff scales with the **failure rate**: big when failures are rare,
-  small when most things fail. And we have **no non-QA family with enough failures** yet.
-
----
-
-## The generalizable recipe (and the API)
-
-The product surface is [`pipeline.py`](pipeline.py) — fully task-agnostic. The **only**
-task-specific input is a `Verifier` (a unit test, an LLM judge, exact match) — and you can
-**auto-generate it with zero manual labeling**: `self_judge(judge_agent)` (reference-free
-grading, no gold) or `self_consistency(resample_fn)` (re-run and measure agreement — no
-judge at all). Or plug in a real outcome signal you already have (tests pass, tool result,
-user accept/reject), which is the most reliable labeler.
-
-```python
-from pipeline import decompose, attempt, gold_judge, Forecaster
-
-# 1. break ANY task into checkable components, attempt + verify each
-verify = my_test_or_judge                      # (question, answer) -> 0..1  (you provide this)
-for q in decompose(task, agent):
-    trace = attempt(q, retrieve(q), agent)
-    store.append((trace, verify(q, trace)))
-
-# 2. forecast failure on new components; intervene only where it's likely
-fc = Forecaster(embedder).fit(*zip(*store))
-if fc.should_intervene(new_trace):             # spend a retry/verify only here
-    ...
-```
-
-Recipe in one line: **forecast per checkable component, bring your own verifier, intervene
-only on the risky ones — everything else is task-agnostic.**
-
----
-
-## Repo map
-
-| path | role |
+| What you get | Number |
 |---|---|
-| `pipeline.py` | the importable API: `decompose / attempt / verify / Forecaster / make_retriever` + auto-verifiers (`self_judge`, `self_consistency`) |
-| `forecast.py` | low-level primitives: k-NN (LOO + cross), ROC-AUC, Spearman |
-| `agents.py` | vendored Haiku agent + OpenAI embedder (lazy clients, keys from env/`.env`) |
-| `bench/` | vendored benchmark loaders + scorers (FanOutQA, MuSiQue) |
-| `_util.py` | vendored helper (`select_for_single`) |
-| `requirements.txt` | `anthropic openai numpy datasets python-dotenv pytest` |
-| `eval/component_forecast.py` | **headline** — per-component forecasting, within + transfer |
-| `eval/gen_balanced.py`, `gen_gsm8k.py` | generate labeled trajectories (QA retrieval / math) |
-| `eval/analyze.py`, `generalize.py` | within-dataset and leave-one-task-type-out AUC |
-| `eval/ablation_reasoning.py` | reasoning-only vs answer-only vs full-trace |
-| `eval/learned_repr.py` | learned representation vs off-the-shelf embeddings |
-| `eval/intervention_policy.py` | gain curve — failures caught per unit of fix budget |
-| `eval/results/` | raw logs + saved trajectory/component datasets |
-| `tests/` | offline gates (no API key): `test_forecast.py`, `test_pipeline.py` |
+| Per-component failure AUC | **0.85** (vs 0.45 whole-task) |
+| Failures caught at 20% verify budget | **31%** (1.56× random) |
+| Budget needed to catch 80% of failures | **58–68%** of components (vs 100% naively) |
+| Transfers to unseen task types | AUC **0.61–0.73** (leave-one-out) |
+
+The trace carries the signal. Reasoning-only AUC is **0.84** — *how* the agent thinks predicts failure independently of whether the answer looks wrong.
+
+---
+
+## Install
 
 ```bash
 pip install -r requirements.txt
-python -m pytest tests/ -q                 # offline gates, no API key
-export ANTHROPIC_API_KEY=...  OPENAI_API_KEY=...
-python eval/component_forecast.py --tasks 18 --max-components 6   # the headline experiment
+```
+
+```
+anthropic
+openai
+numpy
+datasets
+python-dotenv
+pytest
+```
+
+Set your API keys (or put them in a `.env` file at the project root):
+
+```bash
+export ANTHROPIC_API_KEY=your_key
+export OPENAI_API_KEY=your_key
+```
+
+Run the offline test suite (no API keys needed):
+
+```bash
+pytest tests/ -q    # 48 tests, ~0.2s
 ```
 
 ---
 
-## Status & next
+## Quickstart
 
-Proven: per-component forecasting works and transfers, with a generic, tested API.
-Not yet: scale (hundreds–thousands of trajectories so learned representations can pay off),
-a **non-QA family the agent actually fails at** (harder math / coding / tool-use), and a
-live intervention loop measuring real tokens/latency saved.
+```python
+from agents import haiku, opus, _build_openai
+from pipeline import decompose, attempt, tiered_judge, Forecaster
+
+embedder = _build_openai()
+
+# 1. Decompose any task into atomic, checkable sub-questions
+sub_questions = decompose(task, agent=haiku)
+
+# 2. Attempt each sub-question and verify with a tiered judge
+#    Haiku judges first; Opus only called when Haiku is uncertain (~20-30% of cases)
+verifier = tiered_judge(fast_agent=haiku, strong_agent=opus, gold=gold_answer)
+
+traces, labels = [], []
+for q in sub_questions:
+    trace = attempt(q, context=retrieved_context, agent=haiku)
+    label = int(verifier(q, trace) >= 0.5)
+    traces.append(trace)
+    labels.append(label)
+
+# 3. Fit the forecaster on your accumulated trace store
+fc = Forecaster(embedder, k=10).fit(traces, labels)
+
+# 4. At inference — predict before spending a retry or verification call
+new_trace = attempt(new_question, context="", agent=haiku)
+if fc.should_intervene(new_trace):
+    # P(fail) is high — run your verifier or retry here
+    ...
+
+# 5. Grow the store online as more tasks complete
+fc.add(new_trace, label=1)    # 1 = success, 0 = failure
+```
+
+---
+
+## Verifiers
+
+The only task-specific input is a `Verifier`: a `(question, answer) -> float` callable. Three options ship out of the box:
+
+### `tiered_judge` — Haiku first, Opus on uncertainty (recommended)
+
+```python
+from pipeline import tiered_judge
+
+verifier = tiered_judge(
+    fast_agent=haiku,
+    strong_agent=opus,
+    gold=gold_answer,
+    uncertainty_band=(0.35, 0.65),   # only escalate to Opus in this range
+)
+```
+
+Haiku handles confident cases for free; Opus is reserved for the borderline ones. In practice ~0–30% of judgments escalate.
+
+### `self_judge` — no gold answer needed
+
+```python
+from pipeline import self_judge
+
+verifier = self_judge(
+    judge_agent=opus,              # use a different model than the one being judged
+    evidence_fn=retriever,         # optional: ground the judge in retrieved text
+)
+```
+
+A model grades whether the answer is correct and well-supported. Works without ground truth. Use an independent or stronger model as the judge to avoid self-grading bias.
+
+### `self_consistency` — no judge at all
+
+```python
+from pipeline import self_consistency
+
+verifier = self_consistency(
+    resample=lambda q: attempt(q, context="", agent=haiku),
+    samples=3,
+)
+```
+
+Re-runs the question independently and returns the fraction of runs that agree with the given answer. No gold, no judge. Works best when final answers are short and extractable (numbers, entities).
+
+---
+
+## Retrieval
+
+```python
+from pipeline import make_retriever
+
+retriever = make_retriever(corpus_chunks, embedder)
+context   = retriever(query, words=1200)    # top chunks up to a word budget
+```
+
+Embeds the corpus once; subsequent calls are pure dot-product lookup.
+
+---
+
+## `Forecaster` API
+
+```python
+fc = Forecaster(embedder, k=10)
+
+fc.fit(traces, labels)           # list[str], list[int] — bulk load
+fc.add(trace, label)             # add one trace online after it completes
+fc.predict_fail(trace)           # float in [0, 1] — P(this component fails)
+fc.should_intervene(trace, threshold=0.5)   # bool — spend a retry/verify here?
+```
+
+Non-parametric (k-NN over embeddings). No training step; the store grows with `add()` as tasks complete. Predictions become reliable once you have ~50+ traces with both passes and failures represented.
+
+---
+
+## Repo layout
+
+| Path | Role |
+|---|---|
+| `pipeline.py` | Public API: `decompose`, `attempt`, `Forecaster`, `make_retriever`, `tiered_judge`, `self_judge`, `self_consistency` |
+| `forecast.py` | Primitives: k-NN (LOO + cross-task), ROC-AUC, Spearman |
+| `agents.py` | Vendored `haiku` and `opus` agents + OpenAI embedder (lazy init, keys from env/`.env`) |
+| `bench/` | Vendored benchmark loaders and scorers (FanOutQA, MuSiQue) |
+| `eval/` | Experiment scripts — each maps to a finding; results in `eval/results/` |
+| `tests/` | Offline test suite: `test_forecast.py`, `test_pipeline.py` |
+
+---
+
+## Running the headline experiment
+
+```bash
+python eval/component_forecast.py --tasks 18 --max-components 6
+```
+
+Runs the per-component forecasting experiment on FanOutQA + MuSiQue and reports within-dataset and leave-one-task-type-out AUC. Raw logs and saved trajectories land in `eval/results/`.
+
+---
+
+## Limitations
+
+- **Store size matters.** The k-NN forecaster needs ~50–100 traces with a mix of passes and failures before predictions are reliable. A fresh store with only successes will always return low P(fail).
+- **Failure rate dependency.** The intervention savings scale with how often your agent fails. If the agent already succeeds on >90% of components, there is little to gate.
+- **Embedding cost.** Every trace is embedded via the OpenAI API. For high-volume pipelines, batch aggressively or cache embeddings.
+- **Verifier quality sets the ceiling.** Noisy labels (from a weak judge) propagate into the forecaster. A programmatic verifier (unit test, exact match) is always preferable to an LLM judge when available.

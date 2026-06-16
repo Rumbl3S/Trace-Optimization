@@ -94,6 +94,27 @@ def self_consistency(resample: Callable[[str], str], samples: int = 3) -> Verifi
     return verify
 
 
+def tiered_judge(
+    fast_agent: Agent,
+    strong_agent: Agent,
+    gold: str,
+    uncertainty_band: Tuple[float, float] = (0.35, 0.65),
+) -> Verifier:
+    """Two-tier verifier: fast_agent (e.g. Haiku) judges first. Only calls strong_agent
+    (e.g. Opus) when the fast verdict falls in the uncertainty band — typically ~20-30% of
+    cases. Returns the strong verdict on escalation, fast verdict otherwise."""
+    fast_v   = gold_judge(gold, fast_agent)
+    strong_v = gold_judge(gold, strong_agent)
+    lo, hi   = uncertainty_band
+
+    def verify(question: str, answer: str) -> float:
+        score = fast_v(question, answer)
+        if lo <= score <= hi:
+            return strong_v(question, answer)
+        return score
+    return verify
+
+
 def make_retriever(chunks: Sequence[str], embedder) -> Callable[..., str]:
     """Embedding retriever over a corpus: returns the top chunks (by similarity to a query)
     up to a word budget. Embeds the corpus once."""

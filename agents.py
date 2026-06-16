@@ -1,15 +1,17 @@
 """Self-contained agent + embedder for the evals — no external project deps.
 
-`haiku` is a temperature-0 Anthropic agent (`prompt -> (text, tokens)`); `_build_openai()`
-returns an OpenAI `text-embedding-3-small` embedder (`texts -> L2-normalised vectors`).
-Clients are created lazily on first use, so importing this module never needs keys — only
-running an eval does. Keys load from the environment or a nearby `.env`.
+`haiku` / `opus` are temperature-0 Anthropic agents (`prompt -> (text, tokens)`);
+`_build_openai()` returns an OpenAI `text-embedding-3-small` embedder
+(`texts -> L2-normalised vectors`). Clients are created lazily on first use, so importing
+this module never needs keys — only running an eval does. Keys load from the environment
+or a nearby `.env`.
 """
 from __future__ import annotations
 
 import os
 
-_AGENT_MODEL = "claude-haiku-4-5-20251001"
+_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+_OPUS_MODEL  = "claude-opus-4-8"
 _EMBED_MODEL = "text-embedding-3-small"
 
 
@@ -26,9 +28,7 @@ _load_env()
 _client = None
 
 
-def haiku(prompt: str):
-    """Temperature-0 Anthropic agent. Returns (text, total_tokens). Retries once on a
-    transient timeout."""
+def _anthropic_call(model: str, prompt: str, max_tokens: int = 512):
     global _client
     if _client is None:
         import anthropic
@@ -36,12 +36,22 @@ def haiku(prompt: str):
     last = None
     for _ in range(2):
         try:
-            r = _client.messages.create(model=_AGENT_MODEL, max_tokens=512, temperature=0,
+            r = _client.messages.create(model=model, max_tokens=max_tokens, temperature=0,
                                         messages=[{"role": "user", "content": prompt}])
             return r.content[0].text, r.usage.input_tokens + r.usage.output_tokens
         except Exception as e:                              # noqa: BLE001
             last = e
     raise last
+
+
+def haiku(prompt: str):
+    """Fast, cheap temperature-0 agent. Returns (text, total_tokens)."""
+    return _anthropic_call(_HAIKU_MODEL, prompt)
+
+
+def opus(prompt: str):
+    """High-accuracy temperature-0 agent. Returns (text, total_tokens)."""
+    return _anthropic_call(_OPUS_MODEL, prompt, max_tokens=1024)
 
 
 def _build_openai():
