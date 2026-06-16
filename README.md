@@ -61,7 +61,11 @@ predictable (**0.85**), **generically** — and the signal **transfers across ta
 ## The generalizable recipe (and the API)
 
 The product surface is [`pipeline.py`](pipeline.py) — fully task-agnostic. The **only**
-task-specific input is a `Verifier` (a unit test, an LLM judge, exact match).
+task-specific input is a `Verifier` (a unit test, an LLM judge, exact match) — and you can
+**auto-generate it with zero manual labeling**: `self_judge(judge_agent)` (reference-free
+grading, no gold) or `self_consistency(resample_fn)` (re-run and measure agreement — no
+judge at all). Or plug in a real outcome signal you already have (tests pass, tool result,
+user accept/reject), which is the most reliable labeler.
 
 ```python
 from pipeline import decompose, attempt, gold_judge, Forecaster

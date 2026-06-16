@@ -32,6 +32,29 @@ def test_gold_judge_pluggable_verifier():
     assert judge_no("capital?", "London") == 0.0
 
 
+def test_self_judge_needs_no_gold():
+    assert pipeline.self_judge(lambda p: ("YES", 0))("q", "a") == 1.0
+    assert pipeline.self_judge(lambda p: ("NO", 0))("q", "a") == 0.0
+
+
+def test_self_judge_uses_evidence_when_given():
+    seen = {}
+    def judge(p):
+        seen["p"] = p
+        return ("YES", 0)
+    pipeline.self_judge(judge, evidence_fn=lambda q: "the sky is blue")("q?", "blue")
+    assert "the sky is blue" in seen["p"]
+
+
+def test_self_consistency_no_labels_no_judge():
+    consistent = pipeline.self_consistency(lambda q: "ANSWER: 42", samples=3)
+    assert consistent("q", "ANSWER: 42") == 1.0          # all resamples agree -> confident
+    assert consistent("q", "ANSWER: 99") == 0.0          # disagrees with the stable answer
+    pool = iter(["ANSWER: 1", "ANSWER: 2", "ANSWER: 1"])
+    flaky = pipeline.self_consistency(lambda q: next(pool), samples=3)
+    assert 0.0 < flaky("q", "ANSWER: 1") < 1.0           # partial agreement -> middling
+
+
 def _embed(texts):
     # deterministic stub: 'bad' traces -> one cluster, others -> the opposite
     return np.array([[1.0, 0.0] if "bad" in t else [0.0, 1.0] for t in texts])

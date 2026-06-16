@@ -12,6 +12,8 @@ else is task-agnostic. Built on the dependency-light primitives in `forecast.py`
 """
 from __future__ import annotations
 
+import re
+from collections import Counter
 from typing import Callable, List, Optional, Protocol, Sequence, Tuple
 
 from forecast import knn_predict_cross
@@ -50,11 +52,45 @@ class Verifier(Protocol):
 
 
 def gold_judge(gold: str, agent: Agent) -> Verifier:
-    """Example pluggable verifier: an LLM judge against a gold string. Swap for your own
-    correctness check (a unit test, exact match, a rubric) and nothing else changes."""
+    """Verifier against a known gold answer (an LLM judge). Use when you have ground truth."""
     def verify(question: str, answer: str) -> float:
         out = _text(agent(_JUDGE.format(gold=str(gold)[:4000], q=question, a=answer[:1500])))
         return 1.0 if "yes" in out.strip().lower()[:5] else 0.0
+    return verify
+
+
+# ── zero-labeling auto-verifiers (no gold, no human) ─────────────────────────────
+_SELF_JUDGE = ("{ev}Question: {q}\nProposed answer: {a}\n\nJudge strictly: is the proposed "
+               "answer correct and well-supported? Reply YES or NO.")
+
+
+def self_judge(judge_agent: Agent, evidence_fn: Optional[Callable[[str], str]] = None) -> Verifier:
+    """Reference-free auto-verifier — NO gold answer needed. A model grades whether the
+    answer is correct/supported (by retrieved evidence, if `evidence_fn` is given). Fully
+    automatic. NOTE: use an INDEPENDENT (ideally stronger/cheaper-but-different) judge model
+    than the one being judged — a model grading itself is overconfident and learns the judge,
+    not the truth."""
+    def verify(question: str, answer: str) -> float:
+        ev = f"Evidence:\n{evidence_fn(question)[:3000]}\n\n" if evidence_fn else ""
+        out = _text(judge_agent(_SELF_JUDGE.format(ev=ev, q=question, a=answer[:1500])))
+        return 1.0 if "yes" in out.strip().lower()[:5] else 0.0
+    return verify
+
+
+def _final_answer(text: str) -> str:
+    m = re.search(r"answer\s*:\s*(.+)", text, re.I)
+    return (m.group(1) if m else text).strip().lower()
+
+
+def self_consistency(resample: Callable[[str], str], samples: int = 3) -> Verifier:
+    """Label-free AND judge-free auto-verifier: re-attempt the question `samples` times and
+    return the fraction of independent runs whose final answer matches the given one. High
+    agreement => consistent => likely correct; low => flaky => likely failure. Best when the
+    final answer is short/extractable (a number, an entity)."""
+    def verify(question: str, answer: str) -> float:
+        target = _final_answer(answer)
+        finals = [_final_answer(resample(question)) for _ in range(max(1, samples))]
+        return sum(1 for f in finals if f == target) / len(finals)
     return verify
 
 
