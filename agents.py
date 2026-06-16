@@ -33,11 +33,15 @@ def _anthropic_call(model: str, prompt: str, max_tokens: int = 512):
     if _client is None:
         import anthropic
         _client = anthropic.Anthropic()
+    # temperature=0 is deprecated on Claude 4+ models
+    supports_temp = "claude-4" not in model and "opus-4" not in model
+    kwargs = {"temperature": 0} if supports_temp else {}
     last = None
     for _ in range(2):
         try:
-            r = _client.messages.create(model=model, max_tokens=max_tokens, temperature=0,
-                                        messages=[{"role": "user", "content": prompt}])
+            r = _client.messages.create(model=model, max_tokens=max_tokens,
+                                        messages=[{"role": "user", "content": prompt}],
+                                        **kwargs)
             return r.content[0].text, r.usage.input_tokens + r.usage.output_tokens
         except Exception as e:                              # noqa: BLE001
             last = e
@@ -52,6 +56,63 @@ def haiku(prompt: str):
 def opus(prompt: str):
     """High-accuracy temperature-0 agent. Returns (text, total_tokens)."""
     return _anthropic_call(_OPUS_MODEL, prompt, max_tokens=1024)
+
+
+def tool_agent(tools: list | None = None, max_turns: int = 6):
+    """ReAct tool-calling agent. Returns a callable (prompt -> (trace, tokens)).
+
+    `tools` is a subset of ['calculator', 'python_exec', 'wikipedia_search'].
+    Defaults to all three. The full trajectory — reasoning, tool calls, and
+    tool results — is returned as the trace so the Forecaster can embed it.
+    """
+    from tools import TOOL_DEFINITIONS, dispatch
+
+    selected = tools or ["calculator", "python_exec", "wikipedia_search"]
+    tool_defs = [t for t in TOOL_DEFINITIONS if t["name"] in selected]
+
+    def agent(prompt: str):
+        global _client
+        if _client is None:
+            import anthropic
+            _client = anthropic.Anthropic()
+
+        messages = [{"role": "user", "content": prompt}]
+        trace_parts: list[str] = []
+        total_tokens = 0
+
+        for _ in range(max_turns):
+            r = _client.messages.create(
+                model=_HAIKU_MODEL, max_tokens=1024, temperature=0,
+                tools=tool_defs if tool_defs else [],
+                messages=messages,
+            )
+            total_tokens += r.usage.input_tokens + r.usage.output_tokens
+
+            # collect text and tool calls from this turn
+            tool_results = []
+            for block in r.content:
+                if block.type == "text":
+                    trace_parts.append(block.text)
+                elif block.type == "tool_use":
+                    result = dispatch(block.name, block.input)
+                    trace_parts.append(
+                        f"[tool:{block.name}({block.input})] → {result[:500]}"
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result[:4000],
+                    })
+
+            if r.stop_reason == "end_turn" or not tool_results:
+                break
+
+            messages.append({"role": "assistant", "content": r.content})
+            messages.append({"role": "user", "content": tool_results})
+
+        return "\n".join(trace_parts), total_tokens
+
+    return agent
 
 
 def _build_openai():
