@@ -127,9 +127,12 @@ def wikipedia_search(query: str) -> str:
 
 def dispatch(tool_name: str, tool_input: dict) -> str:
     if tool_name == "calculator":
-        return calculator(tool_input["expression"])
+        expr = tool_input.get("expression") or next(iter(tool_input.values()), "")
+        return calculator(expr)
     if tool_name == "python_exec":
-        return python_exec(tool_input["code"])
+        code = tool_input.get("code") or tool_input.get("script") or next(iter(tool_input.values()), "")
+        return python_exec(code)
     if tool_name == "wikipedia_search":
-        return wikipedia_search(tool_input["query"])
+        query = tool_input.get("query") or next(iter(tool_input.values()), "")
+        return wikipedia_search(query)
     return f"Unknown tool: {tool_name}"

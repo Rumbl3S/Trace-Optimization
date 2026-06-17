@@ -1,0 +1,1106 @@
+[
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you define a Node class for the doubly-linked list with prev, next, key, and value attributes?",
+    "label": 1,
+    "p_fail": null,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you define a DoublyLinkedList class with methods to add a node to the head, remove a node, and move a node to the head?",
+    "label": 0,
+    "p_fail": null,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you define an LRUCache class with __init__(capacity), get(key), and put(key, value) methods?",
+    "label": 0,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you implement get(key) to return the value if the key exists, move that node to the head, and return -1 if the key doesn't exist?",
+    "label": 1,
+    "p_fail": 0.6666666666666667,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you implement put(key, value) to add or update a key-value pair, move the node to the head, and evict the least recently used item if capacity is exceeded?",
+    "label": 0,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you verify that after putting 1\u2192A, 2\u2192B, 3\u2192C into a capacity-2 cache, key 1 is no longer in the cache?",
+    "label": 1,
+    "p_fail": 0.6,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you verify that the cache still contains keys 2 and 3 after the eviction?",
+    "label": 1,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement an LRU (Least Recently Used) cache in Python using only a dict and a d",
+    "question": "Can you print PASS if all verifications succeed, or FAIL if any verification fails?",
+    "label": 1,
+    "p_fail": 0.4285714285714286,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly initialize a priority queue with the start node?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly track visited nodes to avoid reprocessing?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly update distances to unvisited neighbors based on current node distance plus edge weight?",
+    "label": 0,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly select the next unvisited node with minimum distance?",
+    "label": 0,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly terminate when the destination node is visited?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly reconstruct and return the path from start to destination?",
+    "label": 0,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the implementation correctly calculate the total distance for the shortest path?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement Dijkstra's shortest-path algorithm in Python. Find the shortest path a",
+    "question": "Does the graph correctly represent all 8 edges with their specified weights?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "What is the definition and algorithm of merge sort?",
+    "label": 1,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "What is the correct Python implementation of merge sort with detailed merge steps printed?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "What is the sorted result of [38, 27, 43, 3, 9, 82, 10] using merge sort?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "What is the time complexity of merge sort in Big O notation?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "Does the implementation correctly print each merge operation during execution?",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "Does the implementation correctly print the final sorted list?",
+    "label": 1,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Implement a working merge sort in Python. Sort this list: [38, 27, 43, 3, 9, 82,",
+    "question": "Does the implementation correctly print the time complexity?",
+    "label": 1,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Does a valid JSON string start with either { or [ or a primitive value?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": true
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Does a valid JSON object start with { and end with }?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Does a valid JSON array start with [ and end with ]?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Does a valid JSON string start and end with double quotes?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Are escape sequences in JSON strings limited to: \\\", \\\\, \\/, \\b, \\f, \\n, \\r, \\t, and \\uXXXX?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Does a valid JSON number match the pattern: optional minus, digits, optional decimal point with digits, optional exponent?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Are the only valid JSON boolean values \"true\" and \"false\"?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Algorithm",
+    "task": "Write a Python function that checks whether a string is valid JSON without impor",
+    "question": "Is \"null\" the only valid JSON null value?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "The following Python binary search has a bug. Find and fix it, then verify with ",
+    "question": "What is the bug in the binary search implementation?",
+    "label": 1,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Debugging",
+    "task": "The following Python binary search has a bug. Find and fix it, then verify with ",
+    "question": "What is the correct fix for the bug?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "The following Python binary search has a bug. Find and fix it, then verify with ",
+    "question": "Does the fixed implementation correctly find an element that exists in the array?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "The following Python binary search has a bug. Find and fix it, then verify with ",
+    "question": "Does the fixed implementation correctly return -1 when the target is not in the array?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "The following Python binary search has a bug. Find and fix it, then verify with ",
+    "question": "Does the fixed implementation handle edge cases like empty arrays, single-element arrays, and targets at boundaries?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "This quicksort implementation has two bugs. Identify both, fix them, and verify ",
+    "question": "What is the first bug in this quicksort implementation?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "This quicksort implementation has two bugs. Identify both, fix them, and verify ",
+    "question": "What is the second bug in this quicksort implementation?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "This quicksort implementation has two bugs. Identify both, fix them, and verify ",
+    "question": "What is the corrected code?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "This quicksort implementation has two bugs. Identify both, fix them, and verify ",
+    "question": "Does the corrected code produce the correct sorted output for [5,3,8,1,9,2,7]?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "I'll break this down into atomic, independently-checkable sub-questions:",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "What is the correct definition of the Fibonacci sequence (base cases and recurrence)?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "What value does the buggy code return for fib(10)?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "What value does the buggy code return for fib(15)?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "What is the bug in the memoization line (memo[n+1] = result)?",
+    "label": 0,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "What should the memoization line be corrected to?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "Does the fixed code return 55 for fib(10)?",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Debugging",
+    "task": "Debug this recursive Fibonacci with memoization \u2014 it returns wrong values for n ",
+    "question": "Does the fixed code return 610 for fib(15)?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the total number of balls in the bag?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the number of ways to choose exactly 2 red balls from 4 red balls?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the number of ways to choose exactly 1 blue ball from 5 blue balls?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the number of ways to choose exactly 3 balls from 12 total balls?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the probability as a fraction (product of favorable outcomes divided by total outcomes)?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "A bag contains 4 red, 5 blue, and 3 green balls. What is the probability of draw",
+    "question": "What is the probability as a decimal?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "What is Newton's method formula for computing square roots?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "What is the stopping criterion in terms of the residual |x\u00b2 - 2|?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation correctly initialize x to 1.0?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation correctly apply Newton's method iteration formula?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation correctly check the stopping criterion |x\u00b2 - 2| < 1e-12?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation correctly count and track the number of iterations?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation print each iteration value?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Implement Newton's method in Python to compute sqrt(2) to 10 decimal places. Sta",
+    "question": "Does the implementation print the total number of iterations needed?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Using dynamic programming, compute the number of ways to make change for exactly",
+    "question": "Write a Python dynamic programming solution to count ways to make change for 100 cents using 1, 5, 10, 25 cent coins",
+    "label": 0,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Using dynamic programming, compute the number of ways to make change for exactly",
+    "question": "Execute the Python solution and print the result for 100 cents",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Using dynamic programming, compute the number of ways to make change for exactly",
+    "question": "Execute the Python solution for 10 cents and verify the answer equals 4",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Using dynamic programming, compute the number of ways to make change for exactly",
+    "question": "Verify the DP logic is correct by manually checking the ways to make 10 cents",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "When do the trains start moving relative to each other?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "How far does Train A travel before Train B starts?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "What is the combined approach speed of both trains?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "How much distance remains to cover when both trains are moving?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "How long after Train B starts do the trains meet?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "What is the total time from 8:00am until they meet?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Math",
+    "task": "Two trains start toward each other: Train A leaves City X at 8:00am traveling 75",
+    "question": "How far from City X is the meeting point?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is Consistency in the CAP theorem?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is Availability in the CAP theorem?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is Partition Tolerance in the CAP theorem?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "Why can a distributed system guarantee at most two of the three CAP properties?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is an example of a real-world CP (Consistency and Partition Tolerance) database system?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is an example of a real-world AP (Availability and Partition Tolerance) database system?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain the CAP theorem precisely: what are Consistency, Availability, and Parti",
+    "question": "What is an example of a real-world CA (Consistency and Availability) database system?",
+    "label": 0,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What is the definition of a process?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What is the definition of a thread?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What are the key differences between processes and threads?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "When should you use a process instead of a thread?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "When should you use a thread instead of a process?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What memory do processes share with each other?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What memory do threads share with each other?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "What is the difference between a process and a thread? Explain when you'd use ea",
+    "question": "What is a race condition?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain TCP's three-way handshake (SYN, SYN-ACK, ACK) step by step. Why does TCP",
+    "question": "What are the three steps of TCP's three-way handshake and what happens in each step?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain TCP's three-way handshake (SYN, SYN-ACK, ACK) step by step. Why does TCP",
+    "question": "Why does TCP require a four-way handshake (FIN, ACK, FIN, ACK) to close a connection instead of a two-way handshake?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain TCP's three-way handshake (SYN, SYN-ACK, ACK) step by step. Why does TCP",
+    "question": "What is the TIME_WAIT state in TCP and what is its purpose?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain TCP's three-way handshake (SYN, SYN-ACK, ACK) step by step. Why does TCP",
+    "question": "How long does TIME_WAIT typically last and why is that duration necessary?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Systems",
+    "task": "Explain TCP's three-way handshake (SYN, SYN-ACK, ACK) step by step. Why does TCP",
+    "question": "What problems could occur if TIME_WAIT did not exist?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "What were the five main causes of the 2008 financial crisis?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "For the first cause, name a specific institution or instrument involved and explain its role.",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "For the second cause, name a specific institution or instrument involved and explain its role.",
+    "label": 0,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "For the third cause, name a specific institution or instrument involved and explain its role.",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "For the fourth cause, name a specific institution or instrument involved and explain its role.",
+    "label": 0,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "For the fifth cause, name a specific institution or instrument involved and explain its role.",
+    "label": 0,
+    "p_fail": 0.375,
+    "retried": true
+  },
+  {
+    "domain": "Research",
+    "task": "What were the five main causes of the 2008 financial crisis? For each cause, nam",
+    "question": "What regulatory change did Dodd-Frank make in response to the 2008 financial crisis?",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "What is the attention mechanism in transformers and how does it differ from recurrence in LSTMs?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "What are the parallelizability advantages of transformers compared to LSTMs?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "How do transformers and LSTMs each handle long-range dependencies in sequences?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "What are the typical use cases for transformers in modern applications?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "What are the typical use cases for LSTMs in modern applications?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "In what year was the paper \"Attention Is All You Need\" published?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "Compare transformer and LSTM architectures for sequence modeling: attention mech",
+    "question": "Who were the authors of the \"Attention Is All You Need\" paper?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "What is supervised learning?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "What is unsupervised learning?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "What is reinforcement learning?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "Name one concrete algorithm example for supervised learning.",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "Name one concrete algorithm example for unsupervised learning.",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "Name one concrete algorithm example for reinforcement learning.",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "What is a reward in reinforcement learning?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Research",
+    "task": "What is the difference between supervised, unsupervised, and reinforcement learn",
+    "question": "What is a policy in reinforcement learning?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "What should the decorator do when a function succeeds on the first attempt?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "What should the decorator do when a function fails all max_attempts times?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "What should the decorator do when a function fails some attempts then succeeds?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "What should the decorator preserve about the decorated function (name, docstring, etc.)?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "What should the decorator do with the delay parameter between retry attempts?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "Does the decorator need to handle both positional and keyword arguments passed to the decorated function?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python decorator @retry(max_attempts=3, delay=0) that retries a function",
+    "question": "Should the decorator re-raise the exception with its original traceback or a new one?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "What is the correct way to use threading.Lock and threading.Condition together for synchronization?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "What is the correct way to implement a bounded queue data structure with capacity limits?",
+    "label": 1,
+    "p_fail": 0.5,
+    "retried": true
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "How should put() block when the queue is full until space becomes available?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "How should get() block when the queue is empty until items become available?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "How do you properly notify waiting threads when the queue state changes?",
+    "label": 1,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "Does the implementation correctly handle the case where multiple producers try to add to a full queue?",
+    "label": 0,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "Does the implementation correctly handle the case where multiple consumers try to remove from an empty queue?",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Implement a thread-safe bounded queue in Python (without using queue.Queue) usin",
+    "question": "Does the implementation prevent race conditions when checking and modifying queue state?",
+    "label": 0,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "What is the syntax for creating a context manager using the @contextmanager decorator from functools?",
+    "label": 0,
+    "p_fail": 0.0,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "What is the correct way to use try-finally or try-except-finally within a @contextmanager to ensure code runs on exit?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "How do you measure elapsed time in Python using the time module?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "How do you log exceptions in Python?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "Does the context manager successfully time and print elapsed time for a successful code block that sleeps 0.05 seconds?",
+    "label": 0,
+    "p_fail": 0.125,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "Does the context manager successfully catch and log a ValueError raised within the context?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "Does the context manager print elapsed time even when an exception occurs?",
+    "label": 1,
+    "p_fail": 0.25,
+    "retried": false
+  },
+  {
+    "domain": "Coding",
+    "task": "Write a Python context manager @contextmanager that times a block of code, catch",
+    "question": "Does the context manager allow the exception to propagate after logging, or should it suppress the exception?",
+    "label": 1,
+    "p_fail": 0.125,
+    "retried": false
+  }
+]

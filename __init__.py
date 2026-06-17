@@ -30,6 +30,8 @@ from pipeline import (
     self_consistency,
     tiered_judge,
     make_retriever,
+    code_judge,
+    extract_code,
 )
 
 from agents import (
@@ -53,6 +55,8 @@ __all__ = [
     "self_judge",
     "self_consistency",
     "tiered_judge",
+    "code_judge",
+    "extract_code",
     # retrieval
     "make_retriever",
     # agents & embedders

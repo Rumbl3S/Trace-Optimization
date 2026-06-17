@@ -26,6 +26,9 @@ _DECOMPOSE = ("Break the task into the minimal list of ATOMIC, independently-che
               "line, no numbering, no commentary.\n\nTask: {task}")
 _ATTEMPT = ("{ctx}\n\nQuestion: {q}\n\nReason step by step, noting what you look for and "
             "what you find, then end with 'ANSWER: ...'.")
+_RETRY  = ("{ctx}\n\nQuestion: {q}\n\nYour previous attempt (which may be wrong):\n{prev}\n\n"
+           "First, in one sentence quote the exact step above that is wrong or incomplete "
+           "and state what NOT to do. Then reattempt from scratch and end with 'ANSWER: ...'.")
 _JUDGE = ("Gold answer to the overall task:\n{gold}\n\nSub-question: {q}\nProposed answer: "
           "{a}\n\nIs the proposed answer correct and supported by the gold? Reply YES or NO.")
 
@@ -99,6 +102,47 @@ def self_consistency(resample: Callable[[str], str], samples: int = 3) -> Verifi
         target = _final_answer(answer)
         finals = [_final_answer(resample(question)) for _ in range(max(1, samples))]
         return sum(1 for f in finals if f == target) / len(finals)
+    return verify
+
+
+def extract_code(text: str) -> str:
+    """Pull the first fenced Python block from text, falling back to the full text."""
+    m = re.search(r"```(?:python|py)?\s*\n(.*?)```", text, re.DOTALL | re.I)
+    return m.group(1).strip() if m else text.strip()
+
+
+def code_judge(check: Callable[[dict, str], bool]) -> Verifier:
+    """Verifier for code-writing and debugging tasks.
+
+    Extracts Python from the agent's answer, exec()s it, then calls
+    check(namespace, stdout) to decide correctness. Returns 1.0 on pass,
+    0.0 on failure or any exception (including syntax errors in the code).
+
+    Example — debug a binary search::
+
+        def my_check(ns, out):
+            fn = ns.get("binary_search")
+            return fn and fn([1, 2, 3, 4, 5], 3) == 2
+
+        verifier = code_judge(my_check)
+        result   = run_task(task, agent=agent, verifier=verifier, forecaster=fc)
+
+    The forecaster still wraps the verifier: when the agent's debugging trace
+    shows uncertainty or repeated revisions, P(fail) rises and a retry fires
+    *before* the verifier is called, letting the agent self-correct.
+    """
+    def verify(question: str, answer: str) -> float:
+        import io, contextlib
+        tail = answer[-3000:] if len(answer) > 3000 else answer
+        code = extract_code(tail)
+        buf  = io.StringIO()
+        ns: dict = {}
+        try:
+            with contextlib.redirect_stdout(buf):
+                exec(compile(code, "<agent>", "exec"), ns)  # noqa: S102
+            return 1.0 if check(ns, buf.getvalue()) else 0.0
+        except Exception:
+            return 0.0
     return verify
 
 
@@ -183,37 +227,89 @@ class TaskResult:
 class Forecaster:
     """k-NN failure forecaster over a trace store. Embed a trace, retrieve the most similar
     past traces, predict P(fail) from their outcomes. No training; `add()` new traces as
-    they finish so the store improves with use."""
+    they finish so the store improves with use.
 
-    def __init__(self, embedder, k: int = 10):
-        self.embedder = embedder
-        self.k = k
-        self._vecs:   List[list] = []
-        self._labels: List[int]  = []
-        self._traces: List[str]  = []   # raw traces stored for explain()
+    PCA (default 64 dims) is fitted once the store exceeds pca_dim examples and kept
+    up-to-date on each add(). kNN then runs in the reduced space, which improves
+    separation in high-dimensional embedding spaces."""
+
+    def __init__(self, embedder, k: int = 10, pca_dim: int = 16):
+        self.embedder  = embedder
+        self.k         = k
+        self.pca_dim   = pca_dim
+        self._raw_vecs: List[list] = []   # full-dim embeddings kept for PCA refitting
+        self._vecs:     List[list] = []   # projected (pca_dim) once PCA is active
+        self._labels:   List[int]  = []
+        self._traces:   List[str]  = []
+        self._pca                  = None
 
     def fit(self, traces: Sequence[str], labels: Sequence[int]) -> "Forecaster":
-        self._traces = list(traces)
-        self._vecs   = [v.tolist() for v in self.embedder(list(traces))]
-        self._labels = [int(x) for x in labels]
+        self._traces   = list(traces)
+        self._raw_vecs = [v.tolist() for v in self.embedder(list(traces))]
+        self._labels   = [int(x) for x in labels]
+        self._pca      = self._fit_pca() if self.pca_dim and len(self._raw_vecs) > self.pca_dim else None
+        self._vecs     = self._project_all()
         return self
 
     def add(self, trace: str, label: int) -> None:
         self._traces.append(trace)
-        self._vecs.append(self._embed1(trace))
+        self._raw_vecs.append(self._embed1_raw(trace))
         self._labels.append(int(label))
+        if self.pca_dim and len(self._raw_vecs) > self.pca_dim:
+            self._pca  = self._fit_pca()
+            self._vecs = self._project_all()
+        else:
+            self._vecs.append(self._raw_vecs[-1])
 
     def predict_fail(self, trace: str) -> float:
-        """Probability this trace's component FAILS (0..1)."""
+        """Probability this trace's component FAILS (0..1), locally normalised.
+
+        Normalises the raw kNN score against the neighbourhood's own failure
+        rate, so a component that scores 0.20 in a region where everything scores
+        0.05 still surfaces as high-risk.  Falls back to raw when neighbourhood
+        has no variance (e.g. all-pass region — genuine signal absence).
+        """
         if len(set(self._labels)) < 2:
             base = sum(self._labels) / max(1, len(self._labels))
             return 1.0 - base
-        succ = knn_predict_cross(self._vecs, self._labels, [self._embed1(trace)], self.k)[0]
-        return 1.0 - succ
+        vec = self._vec(trace)
+        raw_succ = knn_predict_cross(self._vecs, self._labels, [vec], self.k)[0]
+        raw_fail = 1.0 - raw_succ
 
-    def should_intervene(self, trace: str, threshold: float = 0.5) -> bool:
-        """Spend a retry/verify/escalation only when failure is likely."""
-        return self.predict_fail(trace) >= threshold
+        # neighbourhood baseline: mean P(fail) of 2k nearest stored points
+        if len(self._vecs) >= max(self.k * 2, 20):
+            import math
+            top_idx = sorted(range(len(self._vecs)),
+                             key=lambda j: cosine(vec, self._vecs[j]),
+                             reverse=True)[: self.k * 2]
+            neigh_fail = 1.0 - (sum(self._labels[j] for j in top_idx) / len(top_idx))
+            neigh_std  = math.sqrt(neigh_fail * (1.0 - neigh_fail))
+            if neigh_std > 1e-6:
+                z = (raw_fail - neigh_fail) / neigh_std
+                return 1.0 / (1.0 + math.exp(-z))
+        return raw_fail
+
+    @property
+    def adaptive_threshold(self) -> float:
+        """Threshold that tracks the store's current observed failure rate.
+
+        Uses 1.5× the empirical fail rate so we only fire on components that
+        score meaningfully above base rate — automatically right-sized whether
+        the store is 10% or 50% failing, and safe to use with zero history.
+        """
+        if not self._labels:
+            return 0.35
+        fail_rate = 1.0 - (sum(self._labels) / len(self._labels))
+        return max(0.10, min(0.50, 1.5 * fail_rate))
+
+    def should_intervene(self, trace: str, threshold: float | None = None) -> bool:
+        """Spend a retry/verify/escalation only when failure is likely.
+
+        When threshold is None (default) uses adaptive_threshold, which
+        automatically tracks the store's observed failure rate.
+        """
+        t = threshold if threshold is not None else self.adaptive_threshold
+        return self.predict_fail(trace) >= t
 
     def explain(self, trace: str, k: int = 3) -> List[Dict]:
         """Return the k nearest stored traces driving this prediction.
@@ -223,7 +319,7 @@ class Forecaster:
         """
         if not self._vecs:
             return []
-        vec = self._embed1(trace)
+        vec = self._vec(trace)
         ranked = sorted(
             ((cosine(vec, v), l, t)
              for v, l, t in zip(self._vecs, self._labels, self._traces)),
@@ -243,7 +339,31 @@ class Forecaster:
                 return n["excerpt"]
         return None
 
-    def _embed1(self, trace: str) -> list:
+    # ── internals ──────────────────────────────────────────────────────────────
+    def _fit_pca(self):
+        import numpy as np
+        from sklearn.decomposition import PCA
+        X = np.array(self._raw_vecs, dtype="float32")
+        n_comp = min(self.pca_dim, X.shape[0] - 1)
+        pca = PCA(n_components=n_comp)
+        pca.fit(X)
+        return pca
+
+    def _project_all(self) -> List[list]:
+        import numpy as np
+        if self._pca is None:
+            return [v[:] for v in self._raw_vecs]
+        return self._pca.transform(np.array(self._raw_vecs, dtype="float32")).tolist()
+
+    def _vec(self, trace: str) -> list:
+        """Embed and project (into PCA space if active) for kNN lookup."""
+        raw = self._embed1_raw(trace)
+        if self._pca is None:
+            return raw
+        import numpy as np
+        return self._pca.transform(np.array([raw], dtype="float32"))[0].tolist()
+
+    def _embed1_raw(self, trace: str) -> list:
         return self.embedder([trace])[0].tolist()
 
 
@@ -254,7 +374,7 @@ def run_task(
     verifier:    Optional[Verifier] = None,
     forecaster:  Optional[Forecaster] = None,
     retriever:   Optional[Callable[..., str]] = None,
-    threshold:   float = 0.5,
+    threshold:   float | None = None,
     cap:         int = 8,
     display:     bool = True,
     retry:       bool = True,
@@ -272,7 +392,9 @@ def run_task(
         forecaster: Fitted or empty Forecaster. If None, no failure prediction
                     is run — useful for bootstrapping a trace store.
         retriever:  Optional retrieval fn (query -> context string).
-        threshold:  P(fail) threshold to trigger intervention (default 0.5).
+        threshold:  P(fail) cutoff to trigger intervention. None (default) uses
+                    adaptive_threshold, which tracks the store's observed failure
+                    rate automatically — no tuning needed across domains.
         cap:        Max sub-questions to decompose into (default 8).
         display:    Show the live Rich terminal display (default True).
         retry:      Retry once on predicted failure (default True).
@@ -294,7 +416,8 @@ def run_task(
 
         for i, q in enumerate(sub_qs):
             disp.set_attempting(i)
-            ctx   = retriever(q) if retriever else ""
+            retrieval = retriever(q) if retriever else ""
+            ctx   = f"Task: {task}\n\n{retrieval}".strip()
             trace = attempt(q, ctx, agent)
 
             p_fail   = None
@@ -305,9 +428,9 @@ def run_task(
                 p_fail   = forecaster.predict_fail(trace)
                 neighbor = forecaster.nearest_failure(trace)
 
-                if retry and p_fail >= threshold:
-                    # retry once with the same question
-                    trace   = attempt(q, ctx, agent)
+                t = threshold if threshold is not None else forecaster.adaptive_threshold
+                if retry and p_fail >= t:
+                    trace   = _text(agent(_RETRY.format(ctx=ctx, q=q, prev=trace[-2000:])))
                     retried = True
                     p_fail  = forecaster.predict_fail(trace)
 
