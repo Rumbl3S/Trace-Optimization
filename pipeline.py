@@ -21,11 +21,18 @@ from forecast import knn_predict_cross, cosine
 Agent = Callable[[str], object]            # prompt -> (text, tokens) | text
 
 # ── prompts for the generic operations (no dataset logic) ────────────────────────
-_DECOMPOSE = ("Break the task into the minimal list of ATOMIC, independently-checkable "
-              "sub-questions whose answers together fully answer it. One sub-question per "
-              "line, no numbering, no commentary.\n\nTask: {task}")
-_ATTEMPT = ("{ctx}\n\nQuestion: {q}\n\nReason step by step, noting what you look for and "
-            "what you find, then end with 'ANSWER: ...'.")
+_DECOMPOSE = ("List the sub-questions needed to fully answer this task. "
+              "Do NOT solve, execute, run code, or use any tools — output plain text only. "
+              "Use the MINIMUM number: one sub-question unless parts require completely "
+              "separate knowledge or context. A single program, calculation, or chain of "
+              "reasoning — even with multiple outputs — is ONE sub-question. "
+              "One sub-question per line, no numbering, no explanations.\n\nTask: {task}")
+_ATTEMPT = ("{ctx}\n\nQuestion: {q}\n\n"
+            "Reason step by step, noting what you look for and what you find. "
+            "If you write code, put the COMPLETE, self-contained solution in ONE "
+            "python_exec call (variables do NOT persist between calls) and run it "
+            "once to confirm — do not re-implement or re-verify what already works. "
+            "End with 'ANSWER: ...'.")
 _RETRY  = ("{ctx}\n\nQuestion: {q}\n\nYour previous attempt (which may be wrong):\n{prev}\n\n"
            "First, in one sentence quote the exact step above that is wrong or incomplete "
            "and state what NOT to do. Then reattempt from scratch and end with 'ANSWER: ...'.")
@@ -39,9 +46,14 @@ def _text(out: object) -> str:
 
 # ── generic task operations ──────────────────────────────────────────────────────
 def decompose(task: str, agent: Agent, cap: int = 8) -> List[str]:
-    """Split any task into atomic, independently-checkable sub-questions."""
+    """Split any task into atomic, independently-answerable sub-questions."""
     lines = _text(agent(_DECOMPOSE.format(task=task))).splitlines()
-    qs = [ln.strip(" -*\t").strip() for ln in lines if len(ln.strip()) > 6]
+    qs = [
+        ln.strip(" -*\t").strip() for ln in lines
+        if len(ln.strip()) > 6
+        and not ln.strip().startswith("[tool:")   # strip tool-call artifacts
+        and "] →" not in ln                       # strip tool result lines
+    ]
     return qs[:cap] or [task]
 
 
@@ -80,10 +92,14 @@ def self_judge(judge_agent: Agent, evidence_fn: Optional[Callable[[str], str]] =
     not the truth."""
     def verify(question: str, answer: str) -> float:
         ev = f"Evidence:\n{evidence_fn(question)[:3000]}\n\n" if evidence_fn else ""
-        # use the tail of the trace — the conclusion and final answer live there,
-        # not in the first 1500 chars which are typically raw tool-call output
-        tail = answer[-3000:] if len(answer) > 3000 else answer
-        out = _text(judge_agent(_SELF_JUDGE.format(ev=ev, q=question, a=tail)))
+        # Judge the FULL trace, not just the tail. The evidence a judge needs to
+        # confirm a claimed "PASS" — the executed code and tool output — usually
+        # sits in the middle of a tool-agent trace, while the tail is only closing
+        # prose. A small tail window hides that evidence, so the judge rejects the
+        # conclusion as unsupported and a correct component is marked FAIL. Cap to
+        # the last 16k chars purely as a runaway guard on pathological traces.
+        view = answer if len(answer) <= 16000 else answer[-16000:]
+        out = _text(judge_agent(_SELF_JUDGE.format(ev=ev, q=question, a=view)))
         return 1.0 if "yes" in out.strip().lower()[:5] else 0.0
     return verify
 
@@ -127,9 +143,9 @@ def code_judge(check: Callable[[dict, str], bool]) -> Verifier:
         verifier = code_judge(my_check)
         result   = run_task(task, agent=agent, verifier=verifier, forecaster=fc)
 
-    The forecaster still wraps the verifier: when the agent's debugging trace
-    shows uncertainty or repeated revisions, P(fail) rises and a retry fires
-    *before* the verifier is called, letting the agent self-correct.
+    The forecaster still wraps the verifier: when the debugging trace resembles
+    past failures in the store, P(fail) rises and a retry fires *before* the
+    verifier is called, letting the agent self-correct.
     """
     def verify(question: str, answer: str) -> float:
         import io, contextlib
@@ -262,45 +278,46 @@ class Forecaster:
             self._vecs.append(self._raw_vecs[-1])
 
     def predict_fail(self, trace: str) -> float:
-        """Probability this trace's component FAILS (0..1), locally normalised.
+        """Probability this trace's component FAILS (0..1) — kNN over the store.
 
-        Normalises the raw kNN score against the neighbourhood's own failure
-        rate, so a component that scores 0.20 in a region where everything scores
-        0.05 still surfaces as high-risk.  Falls back to raw when neighbourhood
-        has no variance (e.g. all-pass region — genuine signal absence).
+        Returns the fraction of the k nearest stored traces that failed: a trace
+        landing among past failures scores high, one among past successes scores
+        low. That is the whole signal — no heuristics layered on top.
+
+        When the store has no usable signal yet — empty, or only one outcome
+        class seen so far — the forecaster ABSTAINS (returns 0.0). You cannot
+        forecast failure before you have seen both passes and failures, and
+        retrying every component is worse than retrying none. Predictions become
+        meaningful once the store holds a mix of both (~50+ traces in practice).
         """
         if len(set(self._labels)) < 2:
-            base = sum(self._labels) / max(1, len(self._labels))
-            return 1.0 - base
-        vec = self._vec(trace)
+            return 0.0
+        vec      = self._vec(trace)
         raw_succ = knn_predict_cross(self._vecs, self._labels, [vec], self.k)[0]
-        raw_fail = 1.0 - raw_succ
-
-        # neighbourhood baseline: mean P(fail) of 2k nearest stored points
-        if len(self._vecs) >= max(self.k * 2, 20):
-            import math
-            top_idx = sorted(range(len(self._vecs)),
-                             key=lambda j: cosine(vec, self._vecs[j]),
-                             reverse=True)[: self.k * 2]
-            neigh_fail = 1.0 - (sum(self._labels[j] for j in top_idx) / len(top_idx))
-            neigh_std  = math.sqrt(neigh_fail * (1.0 - neigh_fail))
-            if neigh_std > 1e-6:
-                z = (raw_fail - neigh_fail) / neigh_std
-                return 1.0 / (1.0 + math.exp(-z))
-        return raw_fail
+        return 1.0 - raw_succ
 
     @property
     def adaptive_threshold(self) -> float:
-        """Threshold that tracks the store's current observed failure rate.
+        """P(fail) cutoff — 20% of the way from the store's failure rate toward 1.0.
 
-        Uses 1.5× the empirical fail rate so we only fire on components that
-        score meaningfully above base rate — automatically right-sized whether
-        the store is 10% or 50% failing, and safe to use with zero history.
+        Below 10 traces: 0.5 (coin-flip baseline, not enough data to calibrate).
+        After that: fail_rate + (1 − fail_rate) × 0.20, capped at 0.80.
+
+        This scales correctly at both extremes:
+          Low fail (10%):  threshold ≈ 0.28 — catches a 0.35 signal (3× base rate) ✓
+          High fail (70%): threshold ≈ 0.76 — only extreme outliers fire, not everything ✓
+          High fail (90%): threshold ≈ 0.92 — very selective when almost all fail ✓
+
+        A flat 0.35 triggers on everything in a high-failure store. Setting threshold
+        equal to fail_rate means nothing ever triggers (average trace = threshold).
+        The "20% toward 1" formula keeps the bar meaningful in both regimes.
+        Override per-call with should_intervene(t, threshold=…) to fix the bar.
         """
-        if not self._labels:
-            return 0.35
-        fail_rate = 1.0 - (sum(self._labels) / len(self._labels))
-        return max(0.10, min(0.50, 1.5 * fail_rate))
+        n = len(self._labels)
+        if n < 10:
+            return 0.5
+        fail_rate = sum(1 for l in self._labels if l == 0) / n
+        return min(fail_rate + (1 - fail_rate) * 0.20, 0.80)
 
     def should_intervene(self, trace: str, threshold: float | None = None) -> bool:
         """Spend a retry/verify/escalation only when failure is likely.
@@ -369,35 +386,44 @@ class Forecaster:
 
 # ── high-level orchestrator ───────────────────────────────────────────────────
 def run_task(
-    task:        str,
-    agent:       Agent,
-    verifier:    Optional[Verifier] = None,
-    forecaster:  Optional[Forecaster] = None,
-    retriever:   Optional[Callable[..., str]] = None,
-    threshold:   float | None = None,
-    cap:         int = 8,
-    display:     bool = True,
-    retry:       bool = True,
+    task:             str,
+    agent:            Agent,
+    verifier:         Optional[Verifier] = None,
+    forecaster:       Optional[Forecaster] = None,
+    retriever:        Optional[Callable[..., str]] = None,
+    threshold:        float | None = None,
+    cap:              int = 8,
+    display:          bool = True,
+    retry:            bool = True,
+    retry_agent:      Optional[Agent] = None,
+    decompose_agent:  Optional[Agent] = None,
 ) -> TaskResult:
     """Run the full trace_use pipeline on any task.
 
     decompose → attempt → [forecast] → [intervene+retry] → [verify] → store
 
     Args:
-        task:       Any natural-language task.
-        agent:      Callable (prompt -> text | (text, tokens)). Use haiku, opus,
-                    or tool_agent() from agents.py.
-        verifier:   Optional (question, answer) -> 0..1 scorer. If omitted,
-                    self_judge is used when a forecaster is present.
-        forecaster: Fitted or empty Forecaster. If None, no failure prediction
-                    is run — useful for bootstrapping a trace store.
-        retriever:  Optional retrieval fn (query -> context string).
-        threshold:  P(fail) cutoff to trigger intervention. None (default) uses
-                    adaptive_threshold, which tracks the store's observed failure
-                    rate automatically — no tuning needed across domains.
-        cap:        Max sub-questions to decompose into (default 8).
-        display:    Show the live Rich terminal display (default True).
-        retry:      Retry once on predicted failure (default True).
+        task:            Any natural-language task.
+        agent:           Callable (prompt -> text | (text, tokens)). Use haiku,
+                         opus, or tool_agent() from agents.py.
+        verifier:        Optional (question, answer) -> 0..1 scorer. If omitted,
+                         self_judge is used when a forecaster is present.
+        forecaster:      Fitted or empty Forecaster. If None, no failure prediction
+                         is run — useful for bootstrapping a trace store.
+        retriever:       Optional retrieval fn (query -> context string).
+        threshold:       P(fail) cutoff to trigger intervention. None (default) uses
+                         adaptive_threshold, which tracks the store's observed failure
+                         rate automatically — no tuning needed across domains.
+        cap:             Max sub-questions to decompose into (default 8).
+        display:         Show the live Rich terminal display (default True).
+        retry:           Retry once on predicted failure (default True).
+        retry_agent:     Agent to use for retries. Defaults to `agent`. Pass a
+                         stronger model (e.g. Sonnet) so retries actually improve
+                         outcomes rather than repeating the same mistake.
+        decompose_agent: Agent to use for task decomposition. Defaults to `agent`.
+                         Pass a plain text agent (e.g. haiku) to avoid tool-use
+                         during decompose — tool_agent can execute code even when
+                         instructed not to, garbling the sub-question list.
 
     Returns:
         TaskResult with all component traces, labels, predictions, and neighbors.
@@ -411,41 +437,54 @@ def run_task(
     disp = TraceDisplay(task, agent_name=agent_name, store_size=store_n)
 
     with disp:
-        sub_qs = decompose(task, agent, cap=cap)
+        sub_qs = decompose(task, decompose_agent or agent, cap=cap)
         disp.set_components(sub_qs)
 
         for i, q in enumerate(sub_qs):
             disp.set_attempting(i)
             retrieval = retriever(q) if retriever else ""
-            ctx   = f"Task: {task}\n\n{retrieval}".strip()
+            ctx = f"Task: {task}\n\n{retrieval}".strip()
+            # Wire mid-call bail-out: after each tool round the agent checks
+            # whether the partial trace already looks like a past failure and
+            # breaks early rather than burning the remaining turns.
+            if forecaster and hasattr(agent, 'bail_fn'):
+                agent.bail_fn = forecaster.should_intervene
             trace = attempt(q, ctx, agent)
+            first_trace = trace   # preserve first-attempt trajectory for the forecaster
 
             p_fail   = None
             retried  = False
             neighbor = None
 
             if forecaster and len(forecaster._vecs) >= 2:
-                p_fail   = forecaster.predict_fail(trace)
-                neighbor = forecaster.nearest_failure(trace)
+                p_fail   = forecaster.predict_fail(first_trace)
+                neighbor = forecaster.nearest_failure(first_trace)
 
                 t = threshold if threshold is not None else forecaster.adaptive_threshold
                 if retry and p_fail >= t:
-                    trace   = _text(agent(_RETRY.format(ctx=ctx, q=q, prev=trace[-2000:])))
+                    ra = retry_agent or agent
+                    if hasattr(ra, 'bail_fn'):
+                        ra.bail_fn = forecaster.should_intervene
+                    trace   = _text(ra(_RETRY.format(ctx=ctx, q=q, prev=first_trace[-2000:])))
                     retried = True
-                    p_fail  = forecaster.predict_fail(trace)
 
-            # verify / label
+            # verify / label — label reflects final outcome (pass/fail after any retry)
             if verifier:
                 label = int(verifier(q, trace) >= 0.5)
             else:
                 label = 1   # optimistic default when no verifier
 
+            # Store the FIRST ATTEMPT trace with its own label so the forecaster
+            # learns which first-attempt trajectory patterns predict failure.
+            # Storing the retry trace instead inverts the signal: retry traces
+            # have a completely different structure and pollute the kNN store.
+            if forecaster:
+                first_label = int(verifier(q, first_trace) >= 0.5) if verifier and retried else label
+                forecaster.add(first_trace, first_label)
+                disp.update_store(len(forecaster._vecs))
+
             disp.set_result(i, p_fail if p_fail is not None else 0.0,
                             label, retried=retried, neighbor=neighbor)
-
-            if forecaster:
-                forecaster.add(trace, label)
-                disp.update_store(len(forecaster._vecs))
 
             result.components.append(ComponentResult(
                 question=q, trace=trace, label=label,

@@ -190,18 +190,31 @@ def test_self_judge_uses_evidence_when_given():
     assert "the sky is blue" in seen["p"]
 
 
-def test_self_judge_tail_used_for_long_answer():
+def test_self_judge_sees_full_trace_not_just_tail():
     seen = {}
     def judge(p):
         seen["p"] = p
         return ("YES", 0)
-    # head is >3000 chars with unique token; tail is >3000 chars with different token
-    # self_judge slices answer[-3000:], so only TAILTOKEN should appear in the prompt
+    # an 8k trace is under the 16k cap, so the WHOLE trace must reach the judge —
+    # the executed evidence (head) and the conclusion (tail) are both needed.
     head = "HEADTOKEN " * 400   # 4000 chars
     tail = "TAILTOKEN " * 400   # 4000 chars
     self_judge(judge)("q", head + tail)
     assert "TAILTOKEN" in seen["p"]
-    assert "HEADTOKEN" not in seen["p"]
+    assert "HEADTOKEN" in seen["p"]
+
+
+def test_self_judge_caps_pathologically_long_answer():
+    seen = {}
+    def judge(p):
+        seen["p"] = p
+        return ("YES", 0)
+    # beyond 16k the front is dropped as a runaway guard; the tail (conclusion +
+    # most recent evidence) is what's kept.
+    answer = "FRONTMARKER " + ("x" * 20000) + " ENDMARKER"
+    self_judge(judge)("q", answer)
+    assert "ENDMARKER" in seen["p"]
+    assert "FRONTMARKER" not in seen["p"]
 
 
 def test_self_judge_evidence_fn_receives_question():
@@ -518,9 +531,13 @@ def test_forecaster_single_class_all_success_returns_low_fail():
     assert fc.predict_fail("good d") == 0.0
 
 
-def test_forecaster_single_class_all_failure_returns_high_fail():
-    fc = Forecaster(_embed, k=3, pca_dim=0).fit(["bad a", "bad b", "bad c"], [0, 0, 0])
-    assert fc.predict_fail("bad d") == 1.0
+def test_forecaster_single_class_abstains():
+    # only one outcome class seen → no discriminative signal → abstain (0.0),
+    # never cascade into retrying everything. True for all-fail AND all-pass.
+    fc_fail = Forecaster(_embed, k=3, pca_dim=0).fit(["bad a", "bad b", "bad c"], [0, 0, 0])
+    assert fc_fail.predict_fail("bad d") == 0.0
+    fc_pass = Forecaster(_embed, k=3, pca_dim=0).fit(["good a", "good b", "good c"], [1, 1, 1])
+    assert fc_pass.predict_fail("good d") == 0.0
 
 
 def test_forecaster_predict_fail_bounded():
@@ -807,6 +824,37 @@ def test_run_task_retry_false_never_retries():
         display=False,
     )
     assert all(not c.retried for c in result.components)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# tool_agent bail_fn interface (offline — no API call)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_tool_agent_has_bail_fn_attribute(monkeypatch):
+    # tool_agent should expose bail_fn=None so run_task can wire mid-call exit
+    # without an API key — just importing and calling the factory is enough.
+    import sys
+    # stub out the tools import so the factory doesn't need tools.py on path
+    fake_tools = type(sys)("tools")
+    fake_tools.TOOL_DEFINITIONS = []
+    fake_tools.dispatch = lambda name, inp: ""
+    monkeypatch.setitem(sys.modules, "tools", fake_tools)
+    from agents import tool_agent
+    a = tool_agent()
+    assert hasattr(a, 'bail_fn') and a.bail_fn is None
+
+
+def test_tool_agent_bail_fn_settable(monkeypatch):
+    import sys
+    fake_tools = type(sys)("tools")
+    fake_tools.TOOL_DEFINITIONS = []
+    fake_tools.dispatch = lambda name, inp: ""
+    monkeypatch.setitem(sys.modules, "tools", fake_tools)
+    from agents import tool_agent
+    a = tool_agent()
+    sentinel = lambda trace: False
+    a.bail_fn = sentinel
+    assert a.bail_fn is sentinel
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

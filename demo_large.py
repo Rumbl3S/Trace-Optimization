@@ -268,8 +268,8 @@ for i, t in enumerate(TASKS, 1):
         agent=agent,
         verifier=verifier,
         forecaster=fc,
-        threshold=0.35,
         retry=True,
+        decompose_agent=haiku,
         display=True,
     )
     result.domain = t["domain"]
@@ -381,8 +381,9 @@ for c in all_components:
         continue
     actual  = "[green]PASS[/green]" if c.label == 1 else "[red]FAIL[/red]"
     retried = "[yellow]YES[/yellow]" if c.retried else "no"
-    # was the forecast correct?
-    predicted_fail = c.p_fail >= 0.35
+    # was the forecast correct? (0.5 is a display approximation; actual threshold
+    # is adaptive per component — see Forecaster.adaptive_threshold)
+    predicted_fail = c.p_fail >= 0.5
     actually_fail  = c.label == 0
     if predicted_fail == actually_fail:
         correct = "[green]✓[/green]"
