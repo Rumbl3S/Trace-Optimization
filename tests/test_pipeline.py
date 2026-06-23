@@ -841,10 +841,10 @@ def test_tool_agent_has_bail_fn_attribute(monkeypatch):
     monkeypatch.setitem(sys.modules, "tools", fake_tools)
     from agents import tool_agent
     a = tool_agent()
-    assert hasattr(a, 'bail_fn') and a.bail_fn is None
+    assert hasattr(a, 'monitor') and a.monitor is None
 
 
-def test_tool_agent_bail_fn_settable(monkeypatch):
+def test_tool_agent_monitor_settable(monkeypatch):
     import sys
     fake_tools = type(sys)("tools")
     fake_tools.TOOL_DEFINITIONS = []
@@ -852,9 +852,9 @@ def test_tool_agent_bail_fn_settable(monkeypatch):
     monkeypatch.setitem(sys.modules, "tools", fake_tools)
     from agents import tool_agent
     a = tool_agent()
-    sentinel = lambda trace: False
-    a.bail_fn = sentinel
-    assert a.bail_fn is sentinel
+    sentinel = object()
+    a.monitor = sentinel
+    assert a.monitor is sentinel
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

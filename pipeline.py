@@ -397,6 +397,8 @@ def run_task(
     retry:            bool = True,
     retry_agent:      Optional[Agent] = None,
     decompose_agent:  Optional[Agent] = None,
+    monitor=None,
+    brain=None,
 ) -> TaskResult:
     """Run the full trace_use pipeline on any task.
 
@@ -424,6 +426,10 @@ def run_task(
                          Pass a plain text agent (e.g. haiku) to avoid tool-use
                          during decompose — tool_agent can execute code even when
                          instructed not to, garbling the sub-question list.
+        brain:           Optional BrainAgent. When supplied, wires as a monitor AND
+                         stores verified node-level patterns after each component.
+                         Injects targeted warnings into retry prompts when a failure
+                         pattern is detected mid-generation.
 
     Returns:
         TaskResult with all component traces, labels, predictions, and neighbors.
@@ -444,11 +450,15 @@ def run_task(
             disp.set_attempting(i)
             retrieval = retriever(q) if retriever else ""
             ctx = f"Task: {task}\n\n{retrieval}".strip()
-            # Wire mid-call bail-out: after each tool round the agent checks
-            # whether the partial trace already looks like a past failure and
-            # breaks early rather than burning the remaining turns.
-            if forecaster and hasattr(agent, 'bail_fn'):
-                agent.bail_fn = forecaster.should_intervene
+
+            # Reset the background monitor / brain for each fresh component attempt
+            # so the buffer and bail flag from the previous sub-question don't bleed.
+            _active_monitor = brain or monitor
+            if _active_monitor:
+                _active_monitor.reset()
+                if hasattr(agent, 'monitor'):
+                    agent.monitor = _active_monitor
+
             trace = attempt(q, ctx, agent)
             first_trace = trace   # preserve first-attempt trajectory for the forecaster
 
@@ -456,17 +466,40 @@ def run_task(
             retried  = False
             neighbor = None
 
+            # Brain bail: if the brain fired mid-generation, seed the retry with the
+            # targeted warning so the agent gets a specific diagnosis, not a generic nudge.
+            brain_fired = brain and brain.should_bail
+            brain_hint  = (brain.get_intervention() or "") if brain_fired else ""
+
             if forecaster and len(forecaster._vecs) >= 2:
                 p_fail   = forecaster.predict_fail(first_trace)
                 neighbor = forecaster.nearest_failure(first_trace)
 
                 t = threshold if threshold is not None else forecaster.adaptive_threshold
-                if retry and p_fail >= t:
+                should_retry = retry and (p_fail >= t or brain_fired)
+                if should_retry:
                     ra = retry_agent or agent
-                    if hasattr(ra, 'bail_fn'):
-                        ra.bail_fn = forecaster.should_intervene
-                    trace   = _text(ra(_RETRY.format(ctx=ctx, q=q, prev=first_trace[-2000:])))
+                    if _active_monitor:
+                        _active_monitor.reset()
+                        if hasattr(ra, 'monitor'):
+                            ra.monitor = _active_monitor
+                    prev_ctx = (
+                        (brain_hint + "\n\n") if brain_hint else ""
+                    ) + first_trace[-2000:]
+                    trace   = _text(ra(_RETRY.format(ctx=ctx, q=q, prev=prev_ctx)))
                     retried = True
+            elif brain_fired and retry:
+                # Brain fired but no forecaster — still retry with brain warning
+                ra = retry_agent or agent
+                if _active_monitor:
+                    _active_monitor.reset()
+                    if hasattr(ra, 'monitor'):
+                        ra.monitor = _active_monitor
+                prev_ctx = (
+                    (brain_hint + "\n\n") if brain_hint else ""
+                ) + first_trace[-2000:]
+                trace   = _text(ra(_RETRY.format(ctx=ctx, q=q, prev=prev_ctx)))
+                retried = True
 
             # verify / label — label reflects final outcome (pass/fail after any retry)
             if verifier:
@@ -482,6 +515,15 @@ def run_task(
                 first_label = int(verifier(q, first_trace) >= 0.5) if verifier and retried else label
                 forecaster.add(first_trace, first_label)
                 disp.update_store(len(forecaster._vecs))
+
+            # Brain: finalize parse the completed trace (in case background thread
+            # didn't have time), then store node patterns with their verified label.
+            if brain:
+                first_label_for_brain = (
+                    int(verifier(q, first_trace) >= 0.5) if verifier and retried else label
+                )
+                brain.finalize(first_trace)
+                brain.store_result(first_label_for_brain)
 
             disp.set_result(i, p_fail if p_fail is not None else 0.0,
                             label, retried=retried, neighbor=neighbor)

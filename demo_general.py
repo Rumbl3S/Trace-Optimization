@@ -175,7 +175,8 @@ _judge = self_judge(opus)   # opus grades haiku; different model avoids self-gra
 
 TASKS = [
     # ══════════════════════════════════════════════════════════════════════════
-    # GROUP 1 — Easy factual & arithmetic  (~95 % pass)
+    # GROUP 1 — Easy  (~95 % pass)
+    # Builds the pass-cluster in the store so the kNN has a reference baseline.
     # ══════════════════════════════════════════════════════════════════════════
     {
         "task": "What is the capital city of France? Answer in one word.",
@@ -219,7 +220,8 @@ TASKS = [
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GROUP 2 — Medium factual & one-step reasoning  (~75 % pass)
+    # GROUP 2 — Medium  (~75 % pass)
+    # Introduces a few failures; both clusters start forming.
     # ══════════════════════════════════════════════════════════════════════════
     {
         "task": (
@@ -229,24 +231,13 @@ TASKS = [
         "verify": _num_check(160),
     },
     {
-        "task": "What is the approximate distance from Earth to the Moon in kilometres?",
-        "verify": _num_check(384400, tol=0.10),
-    },
-    {
         "task": "In what year did the Berlin Wall fall?",
         "verify": _num_check(1989, tol=0),
     },
     {
         "task": (
-            "Fix the grammatical errors in this sentence and explain each fix:\n"
-            "'Me and him went to the store and buyed some apples yesterday.'"
-        ),
-        "verify": _judge,
-    },
-    {
-        "task": (
             "What is the sum of interior angles of a regular hexagon? "
-            "Derive it from first principles, not from memory."
+            "Derive it from first principles."
         ),
         "verify": _num_check(720),
     },
@@ -263,13 +254,6 @@ TASKS = [
     },
     {
         "task": (
-            "Identify the logical fallacy: "
-            "'You should take this vitamin supplement — my doctor is a millionaire and he takes it every day.'"
-        ),
-        "verify": _judge,
-    },
-    {
-        "task": (
             "What is the speed of sound in air at 20 °C, in metres per second? "
             "Give an approximate value."
         ),
@@ -283,39 +267,30 @@ TASKS = [
         ),
         "verify": _str_check("11:00", "11:00 am", "1100"),
     },
+    {
+        "task": "What is 2^10? Give the exact integer.",
+        "verify": _num_check(1024, tol=0),
+    },
+    {
+        "task": "Convert 100 degrees Celsius to Fahrenheit. Give the exact number.",
+        "verify": _num_check(212, tol=0),
+    },
+    {
+        "task": "What is 5! (five factorial)? Give the exact integer.",
+        "verify": _num_check(120, tol=0),
+    },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GROUP 3 — Hard multi-step & obscure facts  (~55 % pass)
-    # Short over-confident wrong-answer traces start appearing here.
-    # The forecaster should begin flagging these.
+    # GROUP 3 — Hard  (~55 % pass)
+    # Multi-step problems; arithmetic traps; precise recall.
+    # The forecaster begins distinguishing over-confident wrong-answer traces.
     # ══════════════════════════════════════════════════════════════════════════
     {
         "task": (
-            "If you invest $1 000 at 6% annual compound interest, "
+            "If you invest $1,000 at 6% annual compound interest, "
             "how much will you have after 5 years? Give the answer to the nearest dollar."
         ),
         "verify": _num_check(1338, tol=0.01),
-    },
-    {
-        "task": (
-            "What is the half-life of Carbon-14? "
-            "Give the answer in years."
-        ),
-        "verify": _num_check(5730, tol=0.02),
-    },
-    {
-        "task": (
-            "Write a Python function `is_prime(n)` that returns True if n is prime, "
-            "False otherwise. It must handle n ≤ 1 correctly and be efficient for n up to 10^6."
-        ),
-        "verify": _judge,
-    },
-    {
-        "task": (
-            "Explain in 3 bullet points why the Monty Hall problem is counter-intuitive "
-            "and what the correct answer is. Be precise about the probabilities."
-        ),
-        "verify": _judge,
     },
     {
         "task": (
@@ -326,110 +301,199 @@ TASKS = [
     },
     {
         "task": (
-            "What is Euler's number e to 6 significant figures?"
-        ),
-        "verify": _num_check(2.71828, tol=0.0001),
-    },
-    {
-        "task": (
             "A ball is thrown upward with an initial velocity of 20 m/s. "
-            "Using g = 9.8 m/s², how high does it reach (in metres)? Show your working."
+            "Using g = 9.8 m/s², how high does it reach in metres? Show your working."
         ),
         "verify": _num_check(20.4, tol=0.05),
     },
     {
-        "task": (
-            "What is the ISO 3166-1 alpha-2 country code for South Korea?"
-        ),
-        "verify": _str_check("kr", "KR"),
-    },
-    {
-        "task": (
-            "Summarise in exactly two sentences the key difference between "
-            "supervised and unsupervised machine learning."
-        ),
-        "verify": _judge,
-    },
-    {
-        "task": (
-            "Convert the binary number 11011010 to decimal. Show each step."
-        ),
+        "task": "Convert the binary number 11011010 to decimal. Show each step.",
         "verify": _num_check(218, tol=0),
+    },
+    {
+        "task": "How many prime numbers are there between 1 and 100? Give the count.",
+        "verify": _num_check(25, tol=0),
+    },
+    {
+        # Average-speed trap: haiku usually uses the arithmetic mean (75) not harmonic (72).
+        "task": (
+            "A car drives 150 km from A to B at 60 km/h, then immediately returns "
+            "150 km from B to A at 90 km/h. What is the average speed for the whole trip? "
+            "Show your working."
+        ),
+        "verify": _num_check(72, tol=0.01),
+    },
+    {
+        "task": (
+            "What is 37 × 53? Show your working and give the exact integer."
+        ),
+        "verify": _num_check(1961, tol=0),
+    },
+    {
+        "task": (
+            "A shirt costs $45 after a 40% discount. "
+            "What was the original price? Show your working."
+        ),
+        "verify": _num_check(75, tol=0.01),
+    },
+    {
+        "task": (
+            "What is the surface area of a cube with side length 4 cm? "
+            "Give the exact value in cm²."
+        ),
+        "verify": _num_check(96, tol=0),
+    },
+    {
+        "task": (
+            "How many ways can you choose 3 items from a set of 6 (order does not matter)? "
+            "Show the combination formula and calculation."
+        ),
+        "verify": _num_check(20, tol=0),
+    },
+    {
+        "task": (
+            "Simplify the fraction 2/3 + 3/4 − 1/6. "
+            "Give the answer as a single fraction in lowest terms."
+        ),
+        "verify": _str_check("5/4", "1.25"),
+    },
+    {
+        "task": "What is the 15th Fibonacci number? (Sequence starts 1, 1, 2, 3, 5, …)",
+        "verify": _num_check(610, tol=0),
+    },
+    {
+        "task": "How many seconds are in one week? Give the exact integer.",
+        "verify": _num_check(604800, tol=0),
+    },
+    {
+        "task": (
+            "A water tank is 3/4 full. After adding 12 litres it is 4/5 full. "
+            "What is the full capacity of the tank in litres?"
+        ),
+        "verify": _num_check(240, tol=0.01),
+    },
+    {
+        "task": (
+            "What is the sum of interior angles of a regular octagon? "
+            "Use the formula for polygons."
+        ),
+        "verify": _num_check(1080, tol=0),
     },
 
     # ══════════════════════════════════════════════════════════════════════════
-    # GROUP 4 — Hardest: multi-constraint, obscure, or long reasoning chains
-    # (~40 % pass).  By now the forecaster has seen both pass and fail clusters
-    # and should score these higher on P(fail).
+    # GROUP 4 — Hardest  (~40 % pass)
+    # Complex reasoning, subtle traps, and tasks requiring complete accuracy.
+    # Graded by opus — fails when reasoning is incomplete, imprecise, or wrong.
+    # By now the kNN has ~35 stored traces; failures here get flagged early.
     # ══════════════════════════════════════════════════════════════════════════
     {
-        "task": (
-            "What is 18! (18 factorial)? Give the exact integer."
-        ),
+        "task": "What is 18! (18 factorial)? Give the exact integer.",
         "verify": _num_check(6402373705728000, tol=0.001),
     },
     {
         "task": (
-            "In a class of 30 students, 18 study French and 14 study Spanish. "
-            "If 6 study both, how many study neither?"
-        ),
-        "verify": _num_check(4, tol=0),
-    },
-    {
-        "task": (
-            "What is the year in which the Treaty of Westphalia was signed, "
-            "and which war did it end?"
-        ),
-        "verify": _str_check("1648", "thirty years", "thirty-years"),
-    },
-    {
-        "task": (
-            "Write a Python one-liner (single expression, no imports needed) that, "
-            "given a list `nums`, returns the second-largest unique value."
-        ),
-        "verify": _judge,
-    },
-    {
-        "task": (
-            "What is the probability of rolling a sum of 9 with two standard dice? "
+            "What is the probability of rolling a sum of 9 with two standard six-sided dice? "
             "Express as a fraction in lowest terms."
         ),
-        "verify": _str_check("4/36", "1/9", "4 out of 36", "one ninth"),
+        "verify": _str_check("4/36", "1/9", "one ninth"),
     },
     {
         "task": (
-            "Name the three layers of the Earth's atmosphere closest to the surface, "
-            "in order from lowest to highest."
+            "A jar contains 3 red, 5 blue, and 2 green marbles. You draw 2 without replacement. "
+            "What is the probability both are blue? Give as a simplified fraction."
         ),
-        "verify": _str_check("troposphere", "tropo"),
+        "verify": _str_check("2/9", "two ninths"),
     },
     {
-        "task": (
-            "A jar contains 3 red, 5 blue, and 2 green marbles. "
-            "You draw 2 without replacement. "
-            "What is the probability both are blue? Express as a simplified fraction."
-        ),
-        "verify": _str_check("2/9", "20/90", "two ninths"),
-    },
-    {
-        "task": (
-            "What is the LCM (least common multiple) of 12, 18, and 30?"
-        ),
+        "task": "What is the LCM (least common multiple) of 12, 18, and 30?",
         "verify": _num_check(180, tol=0),
     },
     {
+        # Requires exactly 3 bullet points AND correct switching probability (2/3 not 1/2).
         "task": (
-            "Explain the CAP theorem in distributed systems in two sentences, "
-            "naming all three guarantees it describes."
+            "Explain in exactly 3 bullet points why the Monty Hall problem is counter-intuitive "
+            "and what the correct answer is. State the exact probability of winning by switching."
         ),
         "verify": _judge,
     },
     {
+        # Requires naming the fallacy precisely (appeal to authority / ad verecundiam).
         "task": (
-            "How many prime numbers are there between 1 and 100 (inclusive)? "
-            "List them and give the count."
+            "Identify the specific logical fallacy and explain why it is a fallacy:\n"
+            "'You should take this vitamin supplement — my doctor is a millionaire and takes it every day.'"
         ),
-        "verify": _num_check(25, tol=0),
+        "verify": _judge,
+    },
+    {
+        # Requires working Python satisfying all three conditions: correct, handles n<=1, efficient.
+        "task": (
+            "Write a Python function `is_prime(n)` that returns True if n is prime, False otherwise. "
+            "It must correctly handle n ≤ 1, n = 2, and run in O(√n) time."
+        ),
+        "verify": _judge,
+    },
+    {
+        # CAP theorem: all three must be named correctly (Consistency, Availability, Partition tolerance).
+        "task": (
+            "Explain the CAP theorem in distributed systems in exactly two sentences. "
+            "Name all three guarantees it refers to and state what the theorem says about them."
+        ),
+        "verify": _judge,
+    },
+    {
+        # Requires identifying the harmonic-mean trap and computing 72, not 75.
+        "task": (
+            "A car drives 150 km from A to B at 60 km/h, then immediately returns "
+            "150 km from B to A at 90 km/h. What is the average speed for the whole trip? "
+            "Show your working."
+        ),
+        "verify": _num_check(72, tol=0.01),
+    },
+    {
+        # Modular arithmetic via last-digit cycles — requires finding the period of 7^n mod 10.
+        "task": (
+            "What is the last digit of 17^100? "
+            "Find the repeating cycle of last digits of powers of 17 to determine this."
+        ),
+        "verify": _num_check(1, tol=0),
+    },
+    {
+        # Clock-angle: hour hand at 3:15 is at 97.5°, minute at 90° → difference 7.5°.
+        "task": (
+            "A clock shows exactly 3:15. "
+            "What is the angle in degrees between the minute hand and the hour hand? "
+            "Remember the hour hand moves continuously."
+        ),
+        "verify": _num_check(7.5, tol=0.1),
+    },
+    {
+        # Requires the 'difference of two squares' insight or multi-step multiplication.
+        "task": (
+            "What is 847 × 293? Show your working step by step and give the exact integer."
+        ),
+        "verify": _num_check(248171, tol=0),
+    },
+    {
+        # Decode: K→H, H→E, O→L, O→L, R→O / Z→W, R→O, U→R, O→L, G→D → "HELLO WORLD"
+        "task": (
+            "Decode the Caesar cipher 'KHOOR ZRUOG' using a right-shift of 3 (i.e. each "
+            "letter was shifted 3 forward to encrypt). Give the plaintext."
+        ),
+        "verify": _str_check("hello world"),
+    },
+    {
+        # Requires log calculation: floor(100 × log10(2)) + 1 = floor(30.103) + 1 = 31.
+        "task": (
+            "How many digits does 2^100 have? Use logarithms. Show the formula and calculation."
+        ),
+        "verify": _num_check(31, tol=0),
+    },
+    {
+        # Requires complete Euclidean algorithm steps.
+        "task": (
+            "Find the GCD of 252 and 105 using the Euclidean algorithm. Show every step."
+        ),
+        "verify": _num_check(21, tol=0),
     },
 ]
 
@@ -453,8 +517,8 @@ def _auc(labels, scores):
 CATEGORIES = {
     range(0, 10):  "Group 1 — Easy",
     range(10, 20): "Group 2 — Medium",
-    range(20, 30): "Group 3 — Hard",
-    range(30, 40): "Group 4 — Hardest",
+    range(20, 35): "Group 3 — Hard",
+    range(35, 50): "Group 4 — Hardest",
 }
 
 def _group(idx):
@@ -469,8 +533,8 @@ def _group(idx):
 console.print()
 console.print(Panel(
     "[bold cyan]trace-use — general task forecasting[/bold cyan]\n"
-    "[dim]40 everyday tasks · easy → hard · diverse domains "
-    "(factual, math, language, code, reasoning)\n"
+    "[dim]50 everyday tasks · easy → hard · diverse domains "
+    "(factual, math, logic, traps, long chains)\n"
     "kNN forecaster learns which reasoning patterns predict failure · "
     "live 2D embedding plot[/dim]",
     border_style="cyan", padding=(1, 3),
