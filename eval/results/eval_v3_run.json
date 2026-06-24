@@ -1,0 +1,643 @@
+{
+  "summary": {
+    "pass_a": 15,
+    "pass_b": 14,
+    "tokens_a": 483385,
+    "tokens_b": 69921,
+    "cost_a": 0.7250775,
+    "cost_b": 0.8390520000000001,
+    "cost_ratio": 1.1571894038913082,
+    "interventions": 22
+  },
+  "tasks": [
+    {
+      "task": 1,
+      "name": "evaluate +,-,*,/",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 31489,
+      "elapsed": 47.708998918533325,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 2830,
+      "b_elapsed": 36.252169132232666,
+      "b_detail": ""
+    },
+    {
+      "task": 2,
+      "name": "parens + left-assoc",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 15993,
+      "elapsed": 28.146573066711426,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 6017,
+      "b_elapsed": 72.5902771949768,
+      "b_detail": ""
+    },
+    {
+      "task": 3,
+      "name": "add ** power",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 47533,
+      "elapsed": 48.279951095581055,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 3984,
+      "b_elapsed": 52.879095792770386,
+      "b_detail": ""
+    },
+    {
+      "task": 4,
+      "name": "unary + and floats",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 37962,
+      "elapsed": 59.247446060180664,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 5799,
+      "b_elapsed": 72.46317791938782,
+      "b_detail": ""
+    },
+    {
+      "task": 5,
+      "name": "** right-assoc [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 65961,
+      "elapsed": 62.20366811752319,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 5152,
+      "b_elapsed": 61.216150999069214,
+      "b_detail": ""
+    },
+    {
+      "task": 6,
+      "name": "unary minus [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 37673,
+      "elapsed": 37.64360499382019,
+      "code_fires": 2,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 5305,
+      "b_elapsed": 67.04802918434143,
+      "b_detail": ""
+    },
+    {
+      "task": 7,
+      "name": "comparisons [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": false,
+      "tokens": 23525,
+      "elapsed": 76.35931181907654,
+      "code_fires": 0,
+      "carry_used": true,
+      "detail": "No code extracted",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 6216,
+      "b_elapsed": 70.88461685180664,
+      "b_detail": "2**3**2\u2192error(Unexpected token '*' at index 2). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1; -2**2\u2192error(Unexpected token '*' at index 3). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+    },
+    {
+      "task": 8,
+      "name": "variables [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": false,
+      "tokens": 44022,
+      "elapsed": 72.39124488830566,
+      "code_fires": 2,
+      "carry_used": true,
+      "detail": "Compile error: name 'evaluate' is not defined",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 5848,
+      "b_elapsed": 69.38781309127808,
+      "b_detail": "-2**2=4.0 (expected -4.0). -2**2 must equal -(2**2)=-4, not (-2)**2=4. FIX: parse_unary must call parse_power (not parse_primary). Call chain must be: additive\u2192mult\u2192power\u2192unary\u2192primary"
+    },
+    {
+      "task": 9,
+      "name": "modulo % [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 63533,
+      "elapsed": 54.22061491012573,
+      "code_fires": 2,
+      "carry_used": true,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 5270,
+      "b_elapsed": 66.40199613571167,
+      "b_detail": "2**3**2\u2192error(Unexpected token '*'). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1; -2**2\u2192error(Unexpected token '*'). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+    },
+    {
+      "task": 10,
+      "name": "floor div // [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": false,
+      "tokens": 14820,
+      "elapsed": 23.46210503578186,
+      "code_fires": 2,
+      "carry_used": true,
+      "detail": "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1; -2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 4850,
+      "b_elapsed": 64.69427919387817,
+      "b_detail": "2**3**2\u2192error(Unexpected token ('OP', '*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1; -2**2\u2192error(Unexpected token ('OP', '*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+    },
+    {
+      "task": 11,
+      "name": "abs() round() [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": false,
+      "tokens": 54345,
+      "elapsed": 82.69177508354187,
+      "code_fires": 2,
+      "carry_used": true,
+      "detail": "evaluate() not defined",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 6970,
+      "b_elapsed": 79.91128087043762,
+      "b_detail": "2**3**2\u2192error(Unexpected token 'MULTIPLY' ('*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1; -2**2\u2192error(Unexpected token 'MULTIPLY' ('*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+    },
+    {
+      "task": 12,
+      "name": "full integration [HIDDEN]",
+      "domain": "parser",
+      "method": "haiku+brain",
+      "passed": false,
+      "tokens": 24674,
+      "elapsed": 73.85721969604492,
+      "code_fires": 0,
+      "carry_used": true,
+      "detail": "No code extracted",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 6304,
+      "b_elapsed": 78.7127480506897,
+      "b_detail": ""
+    },
+    {
+      "task": 13,
+      "name": "run-length encoding",
+      "domain": "string",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2312,
+      "elapsed": 3.8696720600128174,
+      "code_fires": 1,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 369,
+      "b_elapsed": 5.150461912155151,
+      "b_detail": ""
+    },
+    {
+      "task": 14,
+      "name": "balanced brackets",
+      "domain": "string",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2809,
+      "elapsed": 5.391268968582153,
+      "code_fires": 1,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 883,
+      "b_elapsed": 14.341161966323853,
+      "b_detail": ""
+    },
+    {
+      "task": 15,
+      "name": "word frequency",
+      "domain": "string",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2277,
+      "elapsed": 4.965138912200928,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 597,
+      "b_elapsed": 8.806095838546753,
+      "b_detail": ""
+    },
+    {
+      "task": 16,
+      "name": "longest common substr",
+      "domain": "string",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2858,
+      "elapsed": 5.4658050537109375,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 705,
+      "b_elapsed": 11.60461688041687,
+      "b_detail": ""
+    },
+    {
+      "task": 17,
+      "name": "binary search",
+      "domain": "algo",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2784,
+      "elapsed": 5.572953224182129,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 562,
+      "b_elapsed": 7.630853891372681,
+      "b_detail": ""
+    },
+    {
+      "task": 18,
+      "name": "merge sorted lists",
+      "domain": "algo",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2582,
+      "elapsed": 4.901504039764404,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 518,
+      "b_elapsed": 7.173664093017578,
+      "b_detail": ""
+    },
+    {
+      "task": 19,
+      "name": "count islands",
+      "domain": "algo",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 4053,
+      "elapsed": 8.705128908157349,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": false,
+      "b_tokens": 1110,
+      "b_elapsed": 15.646504878997803,
+      "b_detail": ""
+    },
+    {
+      "task": 20,
+      "name": "two sum",
+      "domain": "algo",
+      "method": "haiku+brain",
+      "passed": true,
+      "tokens": 2180,
+      "elapsed": 4.560425758361816,
+      "code_fires": 0,
+      "carry_used": false,
+      "detail": "",
+      "b_method": "sonnet+thinking",
+      "b_passed": true,
+      "b_tokens": 632,
+      "b_elapsed": 9.852479934692383,
+      "b_detail": ""
+    }
+  ],
+  "trajectory": [
+    {
+      "task": 0,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 0,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 1,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: -). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 1,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "exec error: name 'evaluate' is not defined"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 2,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "-2**2\u2192error(Unexpected token: -). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 2,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "-2**2=4.0 (expected -4.0). -2**2 must equal -(2**2)=-4, not (-2)**2=4. FIX: parse_unary must call parse_power (not parse_primary). Call chain must be: additive\u2192mult\u2192power\u2192unary\u2192primary"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 3,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: ('*', '*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: ('*', '*')). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 3,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "evaluate() not defined"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 4,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "exec error: Unexpected token: *"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 4,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "-2**2=4.0 (expected -4.0). -2**2 must equal -(2**2)=-4, not (-2)**2=4. FIX: parse_unary must call parse_power (not parse_primary). Call chain must be: additive\u2192mult\u2192power\u2192unary\u2192primary"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 5,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "2+3*4\u2192error(Unexpected token at position 1: +). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 5,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.0
+    },
+    {
+      "task": 5,
+      "turn": 2,
+      "p_fail": null,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.0
+    },
+    {
+      "task": 5,
+      "turn": 3,
+      "p_fail": null,
+      "probe_fails": [
+        "exec error: name 'evaluate' is not defined"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 7,
+      "turn": 0,
+      "p_fail": null,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 7,
+      "turn": 1,
+      "p_fail": null,
+      "probe_fails": [
+        "exec error: Expected -4.0, got 4.0"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 8,
+      "turn": 0,
+      "p_fail": 0.0,
+      "probe_fails": [
+        "exec error: Unexpected token: -"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 8,
+      "turn": 1,
+      "p_fail": 0.0,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 9,
+      "turn": 0,
+      "p_fail": 0.0,
+      "probe_fails": [
+        "exec error: Unexpected token: /"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 9,
+      "turn": 1,
+      "p_fail": 0.0,
+      "probe_fails": [
+        "2**3**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1",
+        "-2**2\u2192error(Unexpected token: *). Likely your tokenizer splits '**' into two '*' tokens. FIX: check for '**' BEFORE '*' in your tokenizer: if s[i:i+2]=='**': emit ('**', '**'); i+=2 elif s[i]=='*': emit ('*', '*'); i+=1"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 10,
+      "turn": 0,
+      "p_fail": 0.2,
+      "probe_fails": [
+        "-2**2=4.0 (expected -4.0). -2**2 must equal -(2**2)=-4, not (-2)**2=4. FIX: parse_unary must call parse_power (not parse_primary). Call chain must be: additive\u2192mult\u2192power\u2192unary\u2192primary"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 10,
+      "turn": 1,
+      "p_fail": 0.2,
+      "probe_fails": [
+        "-2**2=4.0 (expected -4.0). -2**2 must equal -(2**2)=-4, not (-2)**2=4. FIX: parse_unary must call parse_power (not parse_primary). Call chain must be: additive\u2192mult\u2192power\u2192unary\u2192primary"
+      ],
+      "fired": true,
+      "severity": 1.0
+    },
+    {
+      "task": 12,
+      "turn": 0,
+      "p_fail": 0.4,
+      "probe_fails": [],
+      "fired": true,
+      "severity": 0.4
+    },
+    {
+      "task": 13,
+      "turn": 0,
+      "p_fail": 0.4,
+      "probe_fails": [],
+      "fired": true,
+      "severity": 0.4
+    },
+    {
+      "task": 14,
+      "turn": 0,
+      "p_fail": 0.2,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.2
+    },
+    {
+      "task": 15,
+      "turn": 0,
+      "p_fail": 0.0,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.0
+    },
+    {
+      "task": 16,
+      "turn": 0,
+      "p_fail": 0.2,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.2
+    },
+    {
+      "task": 17,
+      "turn": 0,
+      "p_fail": 0.2,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.2
+    },
+    {
+      "task": 18,
+      "turn": 0,
+      "p_fail": 0.2,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.2
+    },
+    {
+      "task": 19,
+      "turn": 0,
+      "p_fail": 0.0,
+      "probe_fails": [],
+      "fired": false,
+      "severity": 0.0
+    }
+  ]
+}
