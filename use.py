@@ -166,16 +166,23 @@ class BrainSession:
         _monitored.__name__ = f"brain({model_or_fn if isinstance(model_or_fn, str) else model_or_fn.__name__})"
         return _monitored
 
-    def teach(self, success: bool | int) -> None:
+    def teach(self, success: bool | int, metadata: str = "") -> None:
         """Tell the brain whether the last generation succeeded.
 
-        Call this after you've verified the output (ran tests, checked manually,
-        etc.). One call per generation — no other bookkeeping needed.
+        metadata: optional diagnosis of what went wrong (or right). Shown
+        verbatim in future warnings when this trace matches a new task.
         """
         if not self._last_text:
             return
-        self._brain.store(self._last_text, int(bool(success)))
+        self._brain.store(self._last_text, int(bool(success)), metadata)
         self._last_text = ""
+
+    def seed(self, items: list[dict]) -> None:
+        """Pre-populate with known failure/pass patterns before running any tasks.
+
+        items: list of {'trace': str, 'label': int, 'metadata': str}
+        """
+        self._brain.seed(items)
 
     # ── inspection ───────────────────────────────────────────────────────────
 

@@ -281,6 +281,68 @@ def _diagnose(code: str) -> str:
     return "; ".join(hits[:2]) if hits else "unknown failure"
 
 
+# ── pre-seed patterns ─────────────────────────────────────────────────────────
+
+SEEDS = [
+    {
+        "trace": (
+            "def parse_power(tokens, pos):\n"
+            "    left, pos = parse_primary(tokens, pos)\n"
+            "    while pos < len(tokens) and tokens[pos][1] == '**':\n"
+            "        pos += 1\n"
+            "        right, pos = parse_primary(tokens, pos)\n"
+            "        left = left ** right  # LEFT-ASSOC: (2**3)**2=64, wrong!\n"
+            "    return left, pos\n"
+            "# 2**3**2 = 64.0 (wrong)"
+        ),
+        "label": 0,
+        "metadata": (
+            "** is left-associative (iterative loop). 2**3**2=64 instead of 512. "
+            "FIX: right-recursive — `if '**': exp=parse_power(...); return base**exp`"
+        ),
+    },
+    {
+        "trace": (
+            "def parse_power(tokens, pos):\n"
+            "    base, pos = parse_unary(tokens, pos)  # WRONG: power calls unary\n"
+            "    if pos < len(tokens) and tokens[pos][1] == '**':\n"
+            "        pos += 1\n"
+            "        exp, pos = parse_unary(tokens, pos)\n"
+            "        return base ** exp, pos\n"
+            "    return base, pos\n"
+            "# -2**2 = 4.0 (wrong, should be -4)"
+        ),
+        "label": 0,
+        "metadata": (
+            "parse_power calls parse_unary → -2**2=(-2)**2=4 (wrong, should be -4). "
+            "FIX: parse_power calls parse_primary; parse_unary calls parse_power. "
+            "Call chain: mult→power→unary→primary"
+        ),
+    },
+    {
+        "trace": (
+            "# Correct: right-recursive power, unary wraps power\n"
+            "def parse_power(tokens, pos):\n"
+            "    base, pos = parse_primary(tokens, pos)\n"
+            "    if pos < len(tokens) and tokens[pos][1] == '**':\n"
+            "        pos += 1\n"
+            "        exp, pos = parse_power(tokens, pos)  # right-recursive\n"
+            "        return base ** exp, pos\n"
+            "    return base, pos\n"
+            "def parse_unary(tokens, pos):\n"
+            "    if tokens[pos][1] in ('-', '+'):\n"
+            "        op = tokens[pos][1]; pos += 1\n"
+            "        val, pos = parse_power(tokens, pos)  # unary wraps power\n"
+            "        return (-val if op == '-' else +val), pos\n"
+            "    return parse_power(tokens, pos)\n"
+            "# 2**3**2=512 ✓  -2**2=-4 ✓"
+        ),
+        "label": 1,
+        "metadata": "Correct: parse_unary calls parse_power (right-recursive). 2**3**2=512, -2**2=-4.",
+    },
+]
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -297,6 +359,9 @@ def main() -> None:
         "[dim]from use import BrainSession  |  session.agent(model)  |  session.teach(success)[/]",
         box=box.ROUNDED,
     ))
+
+    session.seed(SEEDS)
+    console.print(f"  [dim]Brain pre-seeded with {len(SEEDS)} known failure patterns[/]\n")
 
     rows:    list[tuple] = []
     n_fires: int         = 0
@@ -325,7 +390,7 @@ def main() -> None:
                 detail = _diagnose(code)
 
         # ── Store outcome ─────────────────────────────────────────────────────
-        session.teach(passed)
+        session.teach(passed, metadata=detail if not passed else "")
 
         status = "PASS" if passed else "FAIL"
         pf_s   = f"{p_fail:.2f}" if p_fail is not None else "—"

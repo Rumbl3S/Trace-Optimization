@@ -182,7 +182,7 @@ class BackgroundMonitor:
 
 
 def tool_agent(tools: list | None = None, max_turns: int = 4,
-               model: str | None = None):
+               model: str | None = None, max_tokens: int = 4096):
     """ReAct tool-calling agent. Returns a callable (prompt -> (trace, tokens)).
 
     `tools` is a subset of ['calculator', 'python_exec', 'wikipedia_search'].
@@ -214,7 +214,7 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
             # tool call — at 1024 a large code block is truncated mid-JSON, the
             # tool input arrives empty, nothing runs, and the component fails.
             r = _client.messages.create(
-                model=_model, max_tokens=4096, temperature=0,
+                model=_model, max_tokens=max_tokens, temperature=0,
                 tools=tool_defs if tool_defs else [],
                 messages=messages,
             )
@@ -230,6 +230,16 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
                         monitor.push(block.text)
                 elif block.type == "tool_use":
                     result = dispatch(block.name, block.input)
+
+                    # Brain intercept: pass raw input dict (no regex) to the
+                    # monitor's on_tool_call hook. The brain runs probe tests
+                    # and kNN in one call and returns a modified result if it
+                    # wants to intervene, or None to leave result unchanged.
+                    if monitor and hasattr(monitor, "on_tool_call"):
+                        _modified = monitor.on_tool_call(block.name, block.input, result)
+                        if _modified is not None:
+                            result = _modified
+
                     chunk  = f"[tool:{block.name}({block.input})] → {result[:500]}"
                     trace_parts.append(chunk)
                     if monitor:
@@ -242,6 +252,12 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
 
             if r.stop_reason == "end_turn" or not tool_results:
                 break
+
+            # After each tool turn: pulse the monitor for immediate check.
+            # This catches failure patterns right after a tool result arrives
+            # rather than waiting for the timed background loop.
+            if monitor and hasattr(monitor, 'pulse'):
+                monitor.pulse()
 
             # Between-turn checkpoint: if the background monitor has already
             # decided this trajectory is failing, exit now rather than burning
@@ -359,8 +375,30 @@ def monitored_agent(base_agent, monitor: BackgroundMonitor):
     return wrapped
 
 
+def _build_local_embedder():
+    """sentence-transformers local embedder — free, no API key, ~10ms/chunk on CPU.
+
+    Uses all-MiniLM-L6-v2 (80MB, 384-dim). Downloaded once on first call.
+    Returns L2-normalised float32 vectors, same interface as _build_openai().
+    """
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+    _model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    def embed(texts):
+        texts = [t[:8000] for t in texts]
+        vecs = _model.encode(texts, normalize_embeddings=True,
+                             show_progress_bar=False, convert_to_numpy=True)
+        return np.asarray(vecs, dtype="float32")
+    return embed
+
+
 def _build_openai():
-    """Return an embedder: list[str] -> (n, d) float32 L2-normalised array."""
+    """OpenAI text-embedding-3-small embedder. Requires OPENAI_API_KEY.
+
+    Returns L2-normalised float32 vectors. Use build_embedder() instead to
+    prefer the free local embedder and fall back here only if needed.
+    """
     from openai import OpenAI
     import numpy as np
     client = OpenAI()
@@ -375,3 +413,15 @@ def _build_openai():
         v = np.asarray(out, dtype="float32")
         return v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
     return embed
+
+
+def build_embedder():
+    """Return the best available embedder.
+
+    Tries sentence-transformers (local, free, no API key) first.
+    Falls back to OpenAI text-embedding-3-small if not installed.
+    """
+    try:
+        return _build_local_embedder()
+    except ImportError:
+        return _build_openai()
