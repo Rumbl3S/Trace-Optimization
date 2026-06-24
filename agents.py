@@ -240,7 +240,10 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
                         if _modified is not None:
                             result = _modified
 
-                    chunk  = f"[tool:{block.name}({block.input})] → {result[:500]}"
+                    # json.dumps guarantees parseable extraction (no brace-count
+                    # issues when code itself contains { } characters).
+                    import json as _json
+                    chunk  = f"[tool:{block.name}({_json.dumps(block.input)})] → {result[:500]}"
                     trace_parts.append(chunk)
                     if monitor:
                         monitor.push(chunk)

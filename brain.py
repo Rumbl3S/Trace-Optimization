@@ -527,7 +527,8 @@ class BrainAgent:
             f"{result}\n\n"
             f"[BRAIN — P(fail)={pf_str}]\n"
             f"{warning}\n"
-            f"Fix the issue above before continuing."
+            f"Fix the specific issue above then call python_exec again immediately "
+            f"with the corrected complete implementation."
         )
 
     def _run_probe(self, code: str) -> list[str]:
@@ -557,7 +558,7 @@ class BrainAgent:
                 parts.append(f"  ✗ {condensed}")
                 if fix_clause:
                     parts.append(fix_clause)
-            parts.append("Fix the specific issue above — do not rewrite the whole function.")
+            parts.append("Fix this issue and call python_exec again with the corrected complete code.")
         elif knn_warning:
             for line in knn_warning.splitlines():
                 line = line.strip()

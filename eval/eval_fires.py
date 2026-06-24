@@ -79,7 +79,8 @@ def _check_text(response: str, check_fn) -> tuple[bool, str]:
 def _extract_code(trace: str, want_fn: str | None = None) -> str | None:
     candidates: list[str] = []
 
-    # python_exec({...}) tool calls
+    # python_exec({...}) tool calls — handle both JSON (new) and repr (old) format
+    import json as _json
     search = 0
     while True:
         start = trace.find("python_exec({", search)
@@ -96,12 +97,17 @@ def _extract_code(trace: str, want_fn: str | None = None) -> str | None:
             i += 1
         raw = trace[brace:i + 1]
         search = i + 1
-        try:
-            d = _ast.literal_eval(raw)
-            if isinstance(d, dict) and "code" in d:
-                candidates.append(d["code"])
-        except Exception:
-            pass
+        code = None
+        for loader in (_json.loads, _ast.literal_eval):
+            try:
+                d = loader(raw)
+                if isinstance(d, dict) and "code" in d:
+                    code = d["code"]
+                    break
+            except Exception:
+                pass
+        if code:
+            candidates.append(code)
 
     # Markdown fenced blocks (with or without language tag)
     for m in re.finditer(r"```(?:python)?\s*(.*?)```", trace, re.DOTALL):
