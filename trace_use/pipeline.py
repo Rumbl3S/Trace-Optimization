@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
-from forecast import knn_predict_cross, cosine
+from .forecast import knn_predict_cross, cosine
 
 Agent = Callable[[str], object]            # prompt -> (text, tokens) | text
 
@@ -121,10 +121,81 @@ def self_consistency(resample: Callable[[str], str], samples: int = 3) -> Verifi
     return verify
 
 
-def extract_code(text: str) -> str:
-    """Pull the first fenced Python block from text, falling back to the full text."""
-    m = re.search(r"```(?:python|py)?\s*\n(.*?)```", text, re.DOTALL | re.I)
-    return m.group(1).strip() if m else text.strip()
+def extract_code(text: str, want_fn: str | None = None) -> str:
+    """Extract the best Python code from an agent trace.
+
+    Handles three formats in priority order:
+      1. python_exec tool calls  (JSON: ``python_exec({"code": "..."})`` )
+      2. Markdown fenced blocks  (``` python ... ```)
+      3. Bare def/class blocks   (last resort; requires want_fn)
+
+    Among tool calls the *last* one wins — it is most likely the
+    post-brain-corrected version.
+    """
+    import json as _json, ast as _ast_mod
+    candidates: list[tuple[int, str]] = []
+
+    # 1. python_exec JSON tool calls
+    call_idx = 0
+    for prefix in ('python_exec({"', "python_exec({'"):
+        search_pos = 0
+        while True:
+            start = text.find(prefix, search_pos)
+            if start == -1:
+                break
+            arg_start = start + len("python_exec(")
+            depth, i = 0, arg_start
+            while i < len(text):
+                if text[i] == "{":    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            raw = text[arg_start: i + 1]
+            search_pos = i + 1
+            code = None
+            for loader in (_json.loads, _ast_mod.literal_eval):
+                try:
+                    d = loader(raw)
+                    if isinstance(d, dict):
+                        code = d.get("code") or d.get("script") or d.get("source")
+                        if code:
+                            break
+                except Exception:
+                    pass
+            if code:
+                candidates.append((10 + call_idx, code))
+                call_idx += 1
+
+    # 2. Markdown fenced blocks
+    for m in re.finditer(r"```(?:python|py)?\s*\n?(.*?)```", text, re.DOTALL | re.I):
+        candidates.append((5, m.group(1).strip()))
+
+    # 3. Bare def/class (only when a specific function name is requested)
+    if want_fn:
+        for kw in ("def", "class"):
+            for m in re.finditer(
+                rf"({kw} {re.escape(want_fn)}[\s\(].*?)(?=\n(?:class |def )|\Z)",
+                text, re.DOTALL,
+            ):
+                candidates.append((1, m.group(1).strip()))
+
+    if not candidates:
+        return text.strip()
+
+    def _score(item: tuple[int, str]) -> tuple[int, int]:
+        priority, c = item
+        try:
+            compile(c, "<s>", "exec")
+        except SyntaxError:
+            return (-1, 0)
+        bonus = 2 if (want_fn and (f"def {want_fn}" in c or f"class {want_fn}" in c)) \
+                else (1 if ("def " in c or "class " in c) else 0)
+        return (bonus, priority)
+
+    best = max(candidates, key=_score)
+    return best[1] if _score(best)[0] >= 0 else text.strip()
 
 
 def code_judge(check: Callable[[dict, str], bool]) -> Verifier:
@@ -434,7 +505,7 @@ def run_task(
     Returns:
         TaskResult with all component traces, labels, predictions, and neighbors.
     """
-    from display import TraceDisplay, print_summary
+    from .display import TraceDisplay, print_summary
 
     store_n    = len(forecaster._vecs) if forecaster else 0
     agent_name = getattr(agent, "__name__", "agent")

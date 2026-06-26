@@ -192,7 +192,7 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
     `model` overrides the default (_HAIKU_MODEL). Pass _SONNET_MODEL or any
     Anthropic model ID to trade cost for capability on harder tasks.
     """
-    from tools import TOOL_DEFINITIONS, dispatch
+    from .tools import TOOL_DEFINITIONS, dispatch
 
     selected = tools or ["calculator", "python_exec", "wikipedia_search"]
     tool_defs = [t for t in TOOL_DEFINITIONS if t["name"] in selected]

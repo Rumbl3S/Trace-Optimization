@@ -773,7 +773,7 @@ class BrainAgent:
         return monitored
 
     def _wrap_model(self, model: str, retry_fn=None, cot: bool = False):
-        from agents import streaming_agent
+        from .agents import streaming_agent
         stream = streaming_agent(model)
         brain  = self
         _retry = retry_fn
@@ -801,7 +801,7 @@ class BrainAgent:
     def _wrap_thinking(self, model: str, retry_fn=None):
         """Extended thinking — model's internal CoT streams directly to the brain."""
         import anthropic
-        import agents as _ag
+        from . import agents as _ag
         brain  = self
         _retry = retry_fn
 

@@ -32,8 +32,9 @@ from pathlib import Path
 _ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from agents import build_embedder, tool_agent, _anthropic_call
-from brain import BrainAgent
+from trace_use import build_embedder, tool_agent
+from trace_use.agents import _anthropic_call
+from trace_use import BrainAgent
 from eval.viz_brain import BrainViz
 
 OUT = _ROOT / "eval" / "results"

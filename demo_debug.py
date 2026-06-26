@@ -20,8 +20,9 @@ from collections import defaultdict
 
 sys.path.insert(0, ".")
 
-from agents import tool_agent, haiku, _build_openai, _load_env
-from pipeline import run_task, Forecaster
+from trace_use import tool_agent, haiku
+from trace_use.agents import _build_openai, _load_env
+from trace_use import run_task, Forecaster
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel

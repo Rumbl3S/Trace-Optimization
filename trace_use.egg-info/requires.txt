@@ -12,3 +12,5 @@ datasets>=2.18
 
 [dev]
 pytest>=8.0
+build
+twine

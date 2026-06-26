@@ -20,8 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, ".")
 
-from agents import haiku, opus, _build_openai, _load_env
-from pipeline import run_task, Forecaster, self_judge
+from trace_use import haiku, opus
+from trace_use.agents import _build_openai, _load_env
+from trace_use import run_task, Forecaster, self_judge
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
