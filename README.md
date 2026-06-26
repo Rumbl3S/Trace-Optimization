@@ -336,7 +336,7 @@ pip install trace-use
 Or install from source (for the latest or to run evals):
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/Rumbl3S/Trace-Optimization.git
 cd Trace-Optimization
 pip install -e .
 ```
@@ -654,11 +654,11 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 
 | Path | Role |
 |---|---|
-| `pipeline.py` | Public API: `run_task`, `decompose`, `attempt`, `Forecaster`, `make_retriever`, all verifiers |
-| `brain.py` | `BrainAgent`, `TrajectoryStore`, `FailureStore` — inference-time failure interception |
-| `forecast.py` | Primitives: `knn_predict`, `knn_predict_cross`, `auc`, `spearman` |
-| `display.py` | Rich live terminal display used by `run_task` |
-| `agents.py` | `haiku`, `opus`, `tool_agent`, `streaming_agent`, `build_embedder` (lazy clients, keys from env/`.env`) |
+| `trace_use/pipeline.py` | Public API: `run_task`, `decompose`, `attempt`, `Forecaster`, `make_retriever`, all verifiers |
+| `trace_use/brain.py` | `BrainAgent`, `TrajectoryStore`, `FailureStore` — inference-time failure interception |
+| `trace_use/forecast.py` | Primitives: `knn_predict`, `knn_predict_cross`, `auc`, `spearman` |
+| `trace_use/display.py` | Rich live terminal display used by `run_task` |
+| `trace_use/agents.py` | `haiku`, `opus`, `tool_agent`, `streaming_agent`, `build_embedder` (lazy clients, keys from env/`.env`) |
 | `demo_general.py` | 40 diverse tasks, CoT haiku, live plot, AUC ~0.68 |
 | `demo_debug.py` | 29 Python debugging tasks, tool agent, AUC ~0.87 |
 | `demo_large.py` | 80+ mixed tasks, full Rich display |
