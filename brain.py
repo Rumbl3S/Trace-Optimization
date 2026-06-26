@@ -499,9 +499,13 @@ class BrainAgent:
         # 2. kNN over past code snippets
         p_fail, knn_warning = self._code_store.query(code[:2000])
 
-        fired = bool(probe_fails) or (
-            p_fail is not None and p_fail >= self._traj_store._threshold
-        )
+        # When a deterministic probe is registered, let it be authoritative:
+        # empty probe_fails = code is verified correct, never intervene.
+        # Only fall back to kNN when no probe exists for this task.
+        if self._task_probe_fn is not None:
+            fired = bool(probe_fails)
+        else:
+            fired = p_fail is not None and p_fail >= self._traj_store._threshold
 
         pt = TrajectoryPoint(
             task_idx=self._current_task,
