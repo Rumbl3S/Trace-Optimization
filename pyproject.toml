@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Forecast agent failure from execution traces — spend retries and verification only where needed."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+keywords = ["llm", "agents", "reliability", "failure-prediction", "ai"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "anthropic>=0.40",
     "openai>=1.40",
@@ -22,15 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 bench = ["datasets>=2.18"]
-dev   = ["pytest>=8.0"]
+dev   = ["pytest>=8.0", "build", "twine"]
 
-[tool.setuptools]
-py-modules = [
-    "pipeline",
-    "brain",
-    "forecast",
-    "agents",
-    "display",
-    "tools",
-    "_util",
-]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trace_use*"]
