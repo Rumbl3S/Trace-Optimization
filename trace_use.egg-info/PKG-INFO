@@ -1,3 +1,23 @@
+Metadata-Version: 2.4
+Name: trace-use
+Version: 0.1.0
+Summary: Forecast agent failure from execution traces — spend retries and verification only where needed.
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: anthropic>=0.40
+Requires-Dist: openai>=1.40
+Requires-Dist: numpy>=1.24
+Requires-Dist: scikit-learn>=1.3
+Requires-Dist: sentence-transformers>=2.7
+Requires-Dist: python-dotenv>=1.0
+Requires-Dist: rich>=13.0
+Requires-Dist: matplotlib>=3.7
+Provides-Extra: bench
+Requires-Dist: datasets>=2.18; extra == "bench"
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+
 # trace_use
 
 **Forecast agent failure from execution traces — spend retries and verification only where they're needed.**
@@ -102,14 +122,14 @@ for i, task in enumerate(tasks):
     brain.reset()
     trace, tokens = agent(task["prompt"])
 
-    code   = extract_code(trace)       # from pipeline import extract_code
-    passed = run_checks(code)          # your own pass/fail function
+    first_code = extract_first_code(trace)
+    passed     = run_checks(first_code)
 
     # IMPORTANT: always store the FIRST-attempt trace with the FIRST-attempt label.
     # Never store retry traces — they conflate recovery patterns with failure patterns.
     brain.store(trace, int(passed))
-    if code:
-        brain.store_code(code, int(passed))
+    if first_code:
+        brain.store_code(first_code, int(passed))
 ```
 
 The brain fires at most **2 times per task** to avoid flooding the agent with warnings. Probe tests fire on first-attempt bugs; kNN fires later in the run once enough failures accumulate.
@@ -170,11 +190,11 @@ def check(namespace: dict, stdout: str) -> bool:
     return fn and fn([1,3,5,7,9], 5) == 2 and fn([1,3,5,7,9], 9) == 4
 
 result = run_task(
-    task       = "Fix the off-by-one in this binary search: ...",
-    agent      = agent,
-    verifier   = code_judge(check),
-    forecaster = fc,
-    retry      = True,
+    task     = "Fix the off-by-one in this binary search: ...",
+    agent    = agent,
+    verifier = code_judge(check),
+    fc       = fc,
+    retry    = True,
 )
 ```
 
@@ -319,12 +339,12 @@ Haiku corrected it in the next turn. **Without this catch at Task 3, the covaria
 ### Install
 
 ```bash
-git clone <this-repo> trace-use
-cd trace-use
-pip install -e .          # installs brain, agents, pipeline as importable modules
+git clone <this-repo>
+cd trace_use
+pip install -r requirements.txt
 ```
 
-Set your API key in a `.env` file at the repo root (or export in your shell):
+Set your API key in a `.env` file at the project root:
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
@@ -334,42 +354,42 @@ OPENAI_API_KEY=sk-...       # only needed if sentence-transformers is not availa
 Verify the offline test suite before running anything with credits:
 
 ```bash
-pytest tests/ -q     # ~150 tests, ~2s, fully stubbed, no API key needed
-```
-
-After `pip install -e .`, the modules are importable from anywhere in your Python environment:
-
-```python
-from brain    import BrainAgent
-from agents   import build_embedder, tool_agent, haiku, opus
-from pipeline import Forecaster, run_task, self_judge, code_judge
+pytest tests/ -q     # ~150 tests, ~2s, fully stubbed
 ```
 
 ---
 
 ### Minimal setup — wrap any task loop in 5 minutes
 
-No probes, no custom verifiers — just the brain's kNN trajectory signal. The brain starts cold and fires warnings as failures accumulate:
+This is the minimal pattern. No probes, no custom verifiers — just the brain's kNN trajectory signal:
 
 ```python
-from brain  import BrainAgent
 from agents import build_embedder, tool_agent
+from brain import BrainAgent
 
-brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent         = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
-agent.monitor = brain                 # one line to attach
+# --- one-time setup ---
+brain = BrainAgent(build_embedder(), threshold=0.30, k=5)
+agent = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
+agent.monitor = brain
 
+# --- your task loop ---
 for i, (prompt, check_fn) in enumerate(my_tasks):
-    brain.set_task(i)                 # no probe_fn = kNN-only mode
+    brain.set_task(i)    # no probe_fn = kNN-only mode
     brain.reset()
 
     trace, tokens = agent(prompt)
-    passed        = check_fn(trace)   # your existing evaluation logic
 
-    brain.store(trace, int(passed))   # brain learns from this outcome
+    # evaluate however you normally would
+    code   = extract_code(trace)
+    passed = check_fn(code)
+
+    # let the brain learn
+    brain.store(trace, int(passed))
+    if code:
+        brain.store_code(code, int(passed))
 ```
 
-The brain's kNN signal becomes meaningful around task 15–20 once it has seen a mix of passes and failures. Probe tests (below) work immediately from task 1.
+The brain starts cold — predictions are flat for the first ~10 tasks. By task 15–20 it has enough stored failures to fire warnings.
 
 ---
 
@@ -479,40 +499,39 @@ Skip probes for:
 
 ### A realistic day-of-work pattern
 
-This mirrors how the portfolio analyzer eval was run. Each task is a sequential step in a larger project; the brain accumulates signal across all of them:
+This mirrors how the portfolio analyzer eval was run:
 
 ```python
-from brain    import BrainAgent
-from agents   import build_embedder, tool_agent
-from pipeline import extract_code, code_judge
-from pathlib  import Path
+from agents import build_embedder, tool_agent
+from brain import BrainAgent
+from eval.viz_brain import BrainViz
+from pathlib import Path
 import json, time
 
-def my_probe(ns: dict) -> list[str]:
-    """Your deterministic edge-case test for the current task."""
-    fn = ns.get("my_function")
-    if not fn:
-        return ["my_function not defined"]
-    result = fn(known_input)
-    if result != expected_output:
-        return [f"Got {result}, expected {expected_output}. FIX: ..."]
-    return []
-
-def my_check(ns: dict, stdout: str) -> bool:
-    """Your full pass/fail verifier — same function you'd pass to code_judge."""
-    fn = ns.get("my_function")
-    return fn and fn(case1) == ans1 and fn(case2) == ans2
-
+# Tasks that together build your project, in dependency order
 TASKS = [
-    {"name": "Step 1", "prompt": "Write my_function that ...", "probe": my_probe},
-    {"name": "Step 2", "prompt": "Now extend it to handle ..."},
-    # tasks in dependency order — each builds on the previous
+    {
+        "name":    "Load and clean data",
+        "prompt":  "Write clean_data(df) that ...",
+        "probe":   probe_clean_data,     # your probe function
+        "check":   check_clean_data,     # your verifier
+        "want_fn": "clean_data",
+    },
+    {
+        "name":    "Compute features",
+        "prompt":  "Write compute_features(df) that ...",
+        "probe":   probe_features,
+        "check":   check_features,
+        "want_fn": "compute_features",
+    },
+    # ... more tasks in dependency order
 ]
 
-brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent         = tool_agent(["python_exec"], max_turns=10, model="claude-haiku-4-5-20251001")
+brain  = BrainAgent(build_embedder(), threshold=0.30, k=5)
+agent  = tool_agent(["python_exec"], max_turns=10, model="claude-haiku-4-5-20251001")
 agent.monitor = brain
-results       = []
+viz    = BrainViz()
+results = []
 
 for i, task in enumerate(TASKS):
     brain.set_task(i, probe_fn=task.get("probe"))
@@ -520,23 +539,30 @@ for i, task in enumerate(TASKS):
     t0 = time.time()
 
     trace, tokens = agent(task["prompt"])
-    fires         = brain._code_interventions
-    code          = extract_code(trace)            # from pipeline import extract_code
+    fires = brain._code_interventions
 
-    # evaluate with code_judge or your own check function
-    verifier   = code_judge(my_check)
-    first_pass = verifier(task["prompt"], trace) >= 0.5
+    # evaluate first attempt and final attempt separately
+    first_code  = extract_first_code(trace, task["want_fn"])
+    first_pass  = run_check(first_code, task["check"])
+    final_code  = extract_best_code(trace, task["want_fn"])
+    final_pass  = run_check(final_code, task["check"])
 
-    print(f"{i+1}/{len(TASKS)} {'✓' if first_pass else '✗'}  "
+    print(f"{i+1}/{len(TASKS)} {'✓' if final_pass else '✗'}  "
           f"{task['name']}  {tokens:,} tok  {time.time()-t0:.0f}s"
-          + (f"  [⚡×{fires}]" if fires else ""))
+          + (f"  [⚡×{fires}]" if fires else "")
+          + ("  [↑ FIXED]" if (not first_pass and final_pass) else ""))
 
-    # store first-attempt trace with first-attempt label
+    # brain learns: always use first-attempt trace and label
     brain.store(trace, int(first_pass))
-    if code:
-        brain.store_code(code, int(first_pass))
+    if first_code:
+        brain.store_code(first_code, int(first_pass))
 
-    results.append({"name": task["name"], "passed": first_pass, "fires": fires})
+    results.append({"name": task["name"], "passed": final_pass,
+                    "first_passed": first_pass, "fires": fires,
+                    "brain_helped": (not first_pass and final_pass)})
+
+    viz.update(brain, results, [r["fires"] for r in results])
+    viz.save(Path("my_session.png"))
 
 json.dump(results, open("my_session.json", "w"), indent=2)
 ```
@@ -553,6 +579,24 @@ json.dump(results, open("my_session.json", "w"), indent=2)
 | **Trajectory Map** | PCA-2D of all stored chunk embeddings. Each completed run is a polyline: green=pass, red=fail. Clusters of failure trajectories become visible as the store fills. |
 | **Score Timeline** | Per-task pass/fail bars with cumulative accuracy line. |
 | **Fire Report** | Brain fires per task + cumulative fire rate vs 30% dashed reference. |
+
+---
+
+## Install
+
+```bash
+pip install -r requirements.txt
+```
+
+```bash
+# .env at project root:
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...     # optional — only if sentence-transformers unavailable
+```
+
+```bash
+pytest tests/ -q          # offline gate, ~2s, no API key needed
+```
 
 ---
 

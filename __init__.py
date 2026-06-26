@@ -1,67 +1,39 @@
 """trace_use — forecast agent failure from execution traces.
 
-Quick start:
-    from trace_use import run_task, Forecaster
-    from trace_use.agents import haiku, opus, tool_agent, _build_openai
+After `pip install -e /path/to/this-repo`, import the modules directly:
 
-    embedder = _build_openai()
-    fc = Forecaster(embedder)
+    from brain    import BrainAgent
+    from agents   import build_embedder, tool_agent, haiku, opus
+    from pipeline import Forecaster, run_task, self_judge, code_judge
 
+Quickstart — wrap any tool agent with the brain (3 lines):
+
+    from brain  import BrainAgent
+    from agents import build_embedder, tool_agent
+
+    brain         = BrainAgent(build_embedder(), threshold=0.30)
+    agent         = tool_agent(["python_exec"], model="claude-haiku-4-5-20251001")
+    agent.monitor = brain
+
+    for i, (prompt, check_fn) in enumerate(my_tasks):
+        brain.set_task(i, probe_fn=my_probe)
+        brain.reset()
+        trace, tokens = agent(prompt)
+        passed = check_fn(trace)
+        brain.store(trace, int(passed))
+
+Forecaster-only (offline, no probes):
+
+    from pipeline import Forecaster, run_task, self_judge
+    from agents   import haiku, opus, build_embedder
+
+    fc     = Forecaster(build_embedder())
     result = run_task(
-        task="What is the GDP of France and how does it compare to Germany?",
-        agent=haiku,
-        forecaster=fc,
+        task       = "What is the GDP of France?",
+        agent      = haiku,
+        verifier   = self_judge(judge_agent=opus),
+        forecaster = fc,
+        retry      = True,
     )
     print(result.summary())
 """
-import sys
-import os
-sys.path.insert(0, os.path.dirname(__file__))
-
-from pipeline import (
-    Forecaster,
-    TaskResult,
-    ComponentResult,
-    run_task,
-    decompose,
-    attempt,
-    gold_judge,
-    self_judge,
-    self_consistency,
-    tiered_judge,
-    make_retriever,
-    code_judge,
-    extract_code,
-)
-
-from agents import (
-    haiku,
-    opus,
-    tool_agent,
-    _build_openai,
-)
-
-__all__ = [
-    # core pipeline
-    "run_task",
-    "Forecaster",
-    "TaskResult",
-    "ComponentResult",
-    # primitives
-    "decompose",
-    "attempt",
-    # verifiers
-    "gold_judge",
-    "self_judge",
-    "self_consistency",
-    "tiered_judge",
-    "code_judge",
-    "extract_code",
-    # retrieval
-    "make_retriever",
-    # agents & embedders
-    "haiku",
-    "opus",
-    "tool_agent",
-    "_build_openai",
-]

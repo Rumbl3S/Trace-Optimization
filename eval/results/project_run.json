@@ -1,0 +1,167 @@
+[
+  {
+    "task": 1,
+    "name": "Simulate correlated stock prices (GBM + Cholesky)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 1,
+    "tokens": 15384,
+    "elapsed": 22.0,
+    "detail": ""
+  },
+  {
+    "task": 2,
+    "name": "Compute log daily returns",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 4841,
+    "elapsed": 9.9,
+    "detail": ""
+  },
+  {
+    "task": 3,
+    "name": "Rolling 20-day statistics (mean, vol, skew)",
+    "first_passed": false,
+    "passed": true,
+    "brain_helped": true,
+    "fires": 1,
+    "tokens": 10351,
+    "elapsed": 17.2,
+    "detail": ""
+  },
+  {
+    "task": 4,
+    "name": "Annualised covariance matrix",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 2050,
+    "elapsed": 7.8,
+    "detail": ""
+  },
+  {
+    "task": 5,
+    "name": "Minimum variance portfolio (scipy.optimize)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 3938,
+    "elapsed": 7.5,
+    "detail": ""
+  },
+  {
+    "task": 6,
+    "name": "Maximum Sharpe ratio portfolio (tangency portfolio)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 3961,
+    "elapsed": 8.1,
+    "detail": ""
+  },
+  {
+    "task": 7,
+    "name": "1-day 95% Value at Risk (historical simulation)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 4179,
+    "elapsed": 8.7,
+    "detail": ""
+  },
+  {
+    "task": 8,
+    "name": "Conditional VaR (Expected Shortfall at 95%)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 4373,
+    "elapsed": 9.7,
+    "detail": ""
+  },
+  {
+    "task": 9,
+    "name": "Maximum drawdown",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 3197,
+    "elapsed": 5.6,
+    "detail": ""
+  },
+  {
+    "task": 10,
+    "name": "Annualised Sharpe ratio",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 5564,
+    "elapsed": 15.7,
+    "detail": ""
+  },
+  {
+    "task": 11,
+    "name": "Portfolio beta to market",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 4638,
+    "elapsed": 10.2,
+    "detail": ""
+  },
+  {
+    "task": 12,
+    "name": "Risk contribution (marginal contribution to portfolio variance)",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 3571,
+    "elapsed": 7.7,
+    "detail": ""
+  },
+  {
+    "task": 13,
+    "name": "Stress test: apply shock scenarios to portfolio",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 2,
+    "tokens": 23895,
+    "elapsed": 28.5,
+    "detail": ""
+  },
+  {
+    "task": 14,
+    "name": "Monthly rebalancing simulation with transaction costs",
+    "first_passed": false,
+    "passed": false,
+    "brain_helped": false,
+    "fires": 2,
+    "tokens": 343172,
+    "elapsed": 269.9,
+    "detail": "failed verification tests"
+  },
+  {
+    "task": 15,
+    "name": "Full portfolio risk report",
+    "first_passed": true,
+    "passed": true,
+    "brain_helped": false,
+    "fires": 0,
+    "tokens": 5473,
+    "elapsed": 12.4,
+    "detail": ""
+  }
+]
