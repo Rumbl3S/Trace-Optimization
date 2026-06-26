@@ -25,8 +25,8 @@ import os
 import re
 from typing import Callable
 
-from brain import BrainAgent, FailureStore
-from agents import _build_openai
+from trace_use import BrainAgent
+from trace_use.agents import _build_openai
 
 
 # ── Routing ──────────────────────────────────────────────────────────────────

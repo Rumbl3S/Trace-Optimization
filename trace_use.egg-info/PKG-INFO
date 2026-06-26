@@ -3,6 +3,10 @@ Name: trace-use
 Version: 0.1.0
 Summary: Forecast agent failure from execution traces — spend retries and verification only where needed.
 License: MIT
+Keywords: llm,agents,reliability,failure-prediction,ai
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
 Requires-Dist: anthropic>=0.40
@@ -17,6 +21,8 @@ Provides-Extra: bench
 Requires-Dist: datasets>=2.18; extra == "bench"
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: build; extra == "dev"
+Requires-Dist: twine; extra == "dev"
 
 # trace_use
 
@@ -92,8 +98,7 @@ The two learned signals combine: `p_fail = 0.55 × p_markov + 0.45 × p_prefix`.
 ### Wiring it up
 
 ```python
-from agents import build_embedder, tool_agent
-from brain import BrainAgent
+from trace_use import BrainAgent, build_embedder, tool_agent
 
 embedder = build_embedder()                          # local sentence-transformers, free
 brain    = BrainAgent(embedder, threshold=0.30, k=5)
@@ -122,14 +127,14 @@ for i, task in enumerate(tasks):
     brain.reset()
     trace, tokens = agent(task["prompt"])
 
-    first_code = extract_first_code(trace)
-    passed     = run_checks(first_code)
+    code   = extract_code(trace)       # from trace_use import extract_code
+    passed = run_checks(code)          # your own pass/fail function
 
     # IMPORTANT: always store the FIRST-attempt trace with the FIRST-attempt label.
     # Never store retry traces — they conflate recovery patterns with failure patterns.
     brain.store(trace, int(passed))
-    if first_code:
-        brain.store_code(first_code, int(passed))
+    if code:
+        brain.store_code(code, int(passed))
 ```
 
 The brain fires at most **2 times per task** to avoid flooding the agent with warnings. Probe tests fire on first-attempt bugs; kNN fires later in the run once enough failures accumulate.
@@ -159,8 +164,7 @@ Always store the **first-attempt trace** with the **first-attempt label** — ev
 ### Quickstart
 
 ```python
-from agents import haiku, opus, build_embedder
-from pipeline import run_task, self_judge, Forecaster
+from trace_use import haiku, opus, build_embedder, run_task, self_judge, Forecaster
 
 embedder   = build_embedder()
 forecaster = Forecaster(embedder)
@@ -179,8 +183,7 @@ print(result.summary())
 ### With a tool-use agent
 
 ```python
-from agents import tool_agent, build_embedder
-from pipeline import run_task, code_judge, Forecaster
+from trace_use import tool_agent, build_embedder, run_task, code_judge, Forecaster
 
 agent = tool_agent(["python_exec"], max_turns=6)
 fc    = Forecaster(build_embedder())
@@ -190,11 +193,11 @@ def check(namespace: dict, stdout: str) -> bool:
     return fn and fn([1,3,5,7,9], 5) == 2 and fn([1,3,5,7,9], 9) == 4
 
 result = run_task(
-    task     = "Fix the off-by-one in this binary search: ...",
-    agent    = agent,
-    verifier = code_judge(check),
-    fc       = fc,
-    retry    = True,
+    task       = "Fix the off-by-one in this binary search: ...",
+    agent      = agent,
+    verifier   = code_judge(check),
+    forecaster = fc,
+    retry      = True,
 )
 ```
 
@@ -226,6 +229,7 @@ Cold-start: predictions become reliable at approximately **50 traces** with a mi
 | Hard code + text (`eval_hard`) | **Sonnet** | 14 | 12/14 (86%) | 13/14 (93%) | +1 task, 1 fire |
 | 30-task intensive (`eval_haiku_intensive`) | Haiku | 30 | 26/30 (87%) | 27/30 (90%) | +2 tasks, 2 fires |
 | Real-world hard tasks (`eval_real_world`) | Haiku | 30 | 28/30 (93%) | 29/30 (97%) | +1 task, 2 fires |
+| Extensive benchmark (`eval_extensive`) | Haiku | 32 | 28/32 (88%) | 28/32 (88%) | 0 tasks, 5 fires |
 | **Portfolio Risk Analyzer (`eval_project`)** | **Haiku** | **15** | **13/15 (87%)** | **14/15 (93%)** | **+1 task, 4 fires** |
 
 ---
@@ -278,6 +282,24 @@ Haiku solved 15/15 GPQA-style text problems correctly on first attempt — Hende
 
 ---
 
+### Extensive hard-task benchmark — 32 tasks (`eval/eval_extensive.py`)
+
+32 tasks drawn from competitive programming (LiveCodeBench Pro / ICPC-Eval difficulty) and GPQA-style science: lazy-propagation segment tree, bitmask TSP, matrix exponentiation, digit DP, Manacher's, minimum window substring, lexicographic topological sort, Kruskal's MST, plus Python debugging traps and 12 physics/math problems.
+
+| | Baseline | +Brain |
+|---|---|---|
+| Code (20 tasks) | 17/20 (85%) | 17/20 (85%) |
+| Text (12 tasks) | 11/12 (92%) | 11/12 (92%) |
+| **Overall** | **28/32 (88%)** | **28/32 (88%)** |
+
+Brain fired on 5 tasks (LCS substring, topological sort, segment tree, Kruskal's MST, late-binding closure); none were fixed. This is the clearest illustration of the brain's ceiling: when a task fails because the entire algorithm is wrong — not because of a specific edge-case bug — probe feedback can't recover it. The brain's value is highest when errors are localized (a formula sign, a boundary condition, a missed edge case), not when the approach itself needs rethinking.
+
+The 4 failures are all genuinely hard for Haiku: lazy-propagation segment tree, Kruskal's MST with Union-Find path compression, Python late-binding closure semantics, and the particle-in-a-box energy formula.
+
+![Extensive hard-task benchmark — Haiku + Brain](eval/results/brain_extensive.png)
+
+---
+
 ### Day-in-the-life project eval — Portfolio Risk Analyzer (`eval/eval_project.py`)
 
 The most realistic test: 15 sequential tasks that together build a complete stock portfolio risk analyzer from scratch, as a data analyst would in a single working session. Each task builds on the previous — bugs in early tasks propagate downstream.
@@ -324,14 +346,6 @@ Haiku corrected it in the next turn. **Without this catch at Task 3, the covaria
 
 ---
 
-### Negative results
-
-- **GSM8K is too easy.** Grade-school math is solved near-perfectly by Haiku at temperature 0; near-zero failure rate leaves nothing to forecast.
-- **Learned embeddings don't help.** Fine-tuned embeddings on this data performed no better than the off-the-shelf sentence-transformers model.
-- **Intervention savings scale with failure rate.** Above ~90% first-attempt accuracy, the marginal gain from interception is small. The brain is most valuable in the 15–40% failure band.
-- **Text/factual tasks fire rarely.** At temperature 0, Haiku is accurate on geography, history, and science recall tasks on first attempt. Brain fires concentrate on algorithmic code tasks where deterministic probe tests can catch bugs immediately.
-- **Some tasks remain out of reach.** Monthly rebalancing with transaction costs (portfolio session Task 14) and thread-safe token bucket (real-world Task 13) failed even after 2 brain interventions each. These require assembling multiple interdependent algorithms correctly in one pass — genuinely beyond Haiku's reliable range.
-
 ---
 
 ## Use it in your own projects
@@ -339,57 +353,61 @@ Haiku corrected it in the next turn. **Without this catch at Task 3, the covaria
 ### Install
 
 ```bash
+pip install trace-use
+```
+
+Or install from source (for the latest or to run evals):
+
+```bash
 git clone <this-repo>
-cd trace_use
-pip install -r requirements.txt
+cd Trace-Optimization
+pip install -e .
 ```
 
-Set your API key in a `.env` file at the project root:
+Set your API key — either export it or drop a `.env` file at your project root:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...       # only needed if sentence-transformers is not available
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...      # only needed if sentence-transformers is unavailable
 ```
 
-Verify the offline test suite before running anything with credits:
+Then import and go:
+
+```python
+from trace_use import BrainAgent, build_embedder, tool_agent
+from trace_use import Forecaster, run_task, self_judge, code_judge
+```
+
+Verify the offline test suite at any time (no API key needed):
 
 ```bash
-pytest tests/ -q     # ~150 tests, ~2s, fully stubbed
+pytest tests/ -q     # 153 tests, ~1s, fully stubbed
 ```
 
 ---
 
 ### Minimal setup — wrap any task loop in 5 minutes
 
-This is the minimal pattern. No probes, no custom verifiers — just the brain's kNN trajectory signal:
+No probes, no custom verifiers — just the brain's kNN trajectory signal. The brain starts cold and fires warnings as failures accumulate:
 
 ```python
-from agents import build_embedder, tool_agent
-from brain import BrainAgent
+from trace_use import BrainAgent, build_embedder, tool_agent
 
-# --- one-time setup ---
-brain = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
-agent.monitor = brain
+brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
+agent         = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
+agent.monitor = brain                 # one line to attach
 
-# --- your task loop ---
 for i, (prompt, check_fn) in enumerate(my_tasks):
-    brain.set_task(i)    # no probe_fn = kNN-only mode
+    brain.set_task(i)                 # no probe_fn = kNN-only mode
     brain.reset()
 
     trace, tokens = agent(prompt)
+    passed        = check_fn(trace)   # your existing evaluation logic
 
-    # evaluate however you normally would
-    code   = extract_code(trace)
-    passed = check_fn(code)
-
-    # let the brain learn
-    brain.store(trace, int(passed))
-    if code:
-        brain.store_code(code, int(passed))
+    brain.store(trace, int(passed))   # brain learns from this outcome
 ```
 
-The brain starts cold — predictions are flat for the first ~10 tasks. By task 15–20 it has enough stored failures to fire warnings.
+The brain's kNN signal becomes meaningful around task 15–20 once it has seen a mix of passes and failures. Probe tests (below) work immediately from task 1.
 
 ---
 
@@ -499,39 +517,38 @@ Skip probes for:
 
 ### A realistic day-of-work pattern
 
-This mirrors how the portfolio analyzer eval was run:
+This mirrors how the portfolio analyzer eval was run. Each task is a sequential step in a larger project; the brain accumulates signal across all of them:
 
 ```python
-from agents import build_embedder, tool_agent
-from brain import BrainAgent
-from eval.viz_brain import BrainViz
-from pathlib import Path
+from trace_use import BrainAgent, build_embedder, tool_agent, extract_code, code_judge
+from pathlib   import Path
 import json, time
 
-# Tasks that together build your project, in dependency order
+def my_probe(ns: dict) -> list[str]:
+    """Your deterministic edge-case test for the current task."""
+    fn = ns.get("my_function")
+    if not fn:
+        return ["my_function not defined"]
+    result = fn(known_input)
+    if result != expected_output:
+        return [f"Got {result}, expected {expected_output}. FIX: ..."]
+    return []
+
+def my_check(ns: dict, stdout: str) -> bool:
+    """Your full pass/fail verifier — same function you'd pass to code_judge."""
+    fn = ns.get("my_function")
+    return fn and fn(case1) == ans1 and fn(case2) == ans2
+
 TASKS = [
-    {
-        "name":    "Load and clean data",
-        "prompt":  "Write clean_data(df) that ...",
-        "probe":   probe_clean_data,     # your probe function
-        "check":   check_clean_data,     # your verifier
-        "want_fn": "clean_data",
-    },
-    {
-        "name":    "Compute features",
-        "prompt":  "Write compute_features(df) that ...",
-        "probe":   probe_features,
-        "check":   check_features,
-        "want_fn": "compute_features",
-    },
-    # ... more tasks in dependency order
+    {"name": "Step 1", "prompt": "Write my_function that ...", "probe": my_probe},
+    {"name": "Step 2", "prompt": "Now extend it to handle ..."},
+    # tasks in dependency order — each builds on the previous
 ]
 
-brain  = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent  = tool_agent(["python_exec"], max_turns=10, model="claude-haiku-4-5-20251001")
+brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
+agent         = tool_agent(["python_exec"], max_turns=10, model="claude-haiku-4-5-20251001")
 agent.monitor = brain
-viz    = BrainViz()
-results = []
+results       = []
 
 for i, task in enumerate(TASKS):
     brain.set_task(i, probe_fn=task.get("probe"))
@@ -539,30 +556,23 @@ for i, task in enumerate(TASKS):
     t0 = time.time()
 
     trace, tokens = agent(task["prompt"])
-    fires = brain._code_interventions
+    fires         = brain._code_interventions
+    code          = extract_code(trace)            # from trace_use import extract_code
 
-    # evaluate first attempt and final attempt separately
-    first_code  = extract_first_code(trace, task["want_fn"])
-    first_pass  = run_check(first_code, task["check"])
-    final_code  = extract_best_code(trace, task["want_fn"])
-    final_pass  = run_check(final_code, task["check"])
+    # evaluate with code_judge or your own check function
+    verifier   = code_judge(my_check)
+    first_pass = verifier(task["prompt"], trace) >= 0.5
 
-    print(f"{i+1}/{len(TASKS)} {'✓' if final_pass else '✗'}  "
+    print(f"{i+1}/{len(TASKS)} {'✓' if first_pass else '✗'}  "
           f"{task['name']}  {tokens:,} tok  {time.time()-t0:.0f}s"
-          + (f"  [⚡×{fires}]" if fires else "")
-          + ("  [↑ FIXED]" if (not first_pass and final_pass) else ""))
+          + (f"  [⚡×{fires}]" if fires else ""))
 
-    # brain learns: always use first-attempt trace and label
+    # store first-attempt trace with first-attempt label
     brain.store(trace, int(first_pass))
-    if first_code:
-        brain.store_code(first_code, int(first_pass))
+    if code:
+        brain.store_code(code, int(first_pass))
 
-    results.append({"name": task["name"], "passed": final_pass,
-                    "first_passed": first_pass, "fires": fires,
-                    "brain_helped": (not first_pass and final_pass)})
-
-    viz.update(brain, results, [r["fires"] for r in results])
-    viz.save(Path("my_session.png"))
+    results.append({"name": task["name"], "passed": first_pass, "fires": fires})
 
 json.dump(results, open("my_session.json", "w"), indent=2)
 ```
@@ -579,24 +589,6 @@ json.dump(results, open("my_session.json", "w"), indent=2)
 | **Trajectory Map** | PCA-2D of all stored chunk embeddings. Each completed run is a polyline: green=pass, red=fail. Clusters of failure trajectories become visible as the store fills. |
 | **Score Timeline** | Per-task pass/fail bars with cumulative accuracy line. |
 | **Fire Report** | Brain fires per task + cumulative fire rate vs 30% dashed reference. |
-
----
-
-## Install
-
-```bash
-pip install -r requirements.txt
-```
-
-```bash
-# .env at project root:
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...     # optional — only if sentence-transformers unavailable
-```
-
-```bash
-pytest tests/ -q          # offline gate, ~2s, no API key needed
-```
 
 ---
 
@@ -675,6 +667,7 @@ python eval/eval_hard.py        # 14 hard one-shot failures, Sonnet
 python eval/eval_hard.py --haiku   # same tasks with Haiku
 python eval/eval_haiku_intensive.py   # 30 tasks, haiku, intensive
 python eval/eval_real_world.py  # 30 hard (segment tree, GPQA-style), haiku
+python eval/eval_extensive.py   # 32 tasks, LiveCodeBench Pro / ICPC-Eval difficulty
 python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 ```
 
@@ -697,6 +690,7 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 | `eval/eval_hard.py` | 14 hard one-shot failures, Sonnet + Haiku |
 | `eval/eval_haiku_intensive.py` | 30-task intensive haiku session |
 | `eval/eval_real_world.py` | 30 hard tasks: competitive programming + GPQA-style science |
+| `eval/eval_extensive.py` | 32 tasks: LiveCodeBench Pro / ICPC-Eval difficulty + GPQA-style |
 | `eval/eval_project.py` | 15-task portfolio risk analyzer — the day-in-the-life benchmark |
 | `eval/viz_brain.py` | 4-panel live brain dashboard |
 | `eval/results/` | All saved charts and JSON run logs |
@@ -706,9 +700,8 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 
 ## Limitations
 
-- **Store size matters.** The kNN trajectory signal needs ~50 traces with mixed outcomes before predictions are reliable. Probe tests (deterministic) work immediately with zero warm-up.
-- **Trace richness is a prerequisite.** One-liner responses produce near-identical embeddings for correct and incorrect answers. Force chain-of-thought output or use a tool-use agent.
-- **Verifier quality sets the ceiling.** Noisy labels propagate into the kNN store and corrupt predictions. Use programmatic checks when possible; when using LLM judges, always use a different model than the one being judged.
-- **Failure rate dependency.** Savings scale with how often the agent fails. Above ~90% pass rate the brain fires rarely; it is most valuable in the 15–40% failure band.
-- **Brain fires on `python_exec` calls.** Probe tests require tool calls to intercept. Text-only agents use the trajectory kNN signal alone, which requires accumulated failure history.
-- **Some tasks are out of reach.** Complex multi-step algorithms (rebalancing simulation, thread-safe rate limiter) failed even after 2 brain interventions. The brain helps haiku succeed faster, not beyond its capability ceiling.
+- **Probe tests need a known failure mode.** They catch localized bugs — a wrong formula, a missed edge case, a boundary condition. When the whole algorithm approach is wrong, probe feedback alone can't recover it (seen in the extensive benchmark: segment tree, Kruskal's MST).
+- **kNN signal needs warm-up.** The trajectory and code-snippet stores need ~50 traces with mixed outcomes before predictions are reliable. Probe tests work immediately; kNN fires later as failures accumulate.
+- **Trace richness is required.** One-liner responses produce near-identical embeddings regardless of correctness. Use a tool-calling agent or wrap any text model in a CoT prompt that forces step-by-step output.
+- **Verifier quality sets the ceiling.** Mislabeled traces corrupt the kNN store. Prefer programmatic checks; when using an LLM judge, always use a different model than the one being evaluated.
+- **Brain is most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare and marginal gains are small. Below ~60%, the store fills quickly with failures but the model may need a fundamentally different approach rather than mid-turn correction.

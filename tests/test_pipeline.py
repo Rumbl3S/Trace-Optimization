@@ -13,8 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import pipeline
-from pipeline import (
+import trace_use.pipeline as pipeline
+from trace_use import (
     Forecaster, TaskResult, ComponentResult,
     decompose, attempt,
     gold_judge, self_judge, self_consistency, tiered_judge,
@@ -835,22 +835,22 @@ def test_tool_agent_has_bail_fn_attribute(monkeypatch):
     # without an API key — just importing and calling the factory is enough.
     import sys
     # stub out the tools import so the factory doesn't need tools.py on path
-    fake_tools = type(sys)("tools")
+    fake_tools = type(sys)("trace_use.tools")
     fake_tools.TOOL_DEFINITIONS = []
     fake_tools.dispatch = lambda name, inp: ""
-    monkeypatch.setitem(sys.modules, "tools", fake_tools)
-    from agents import tool_agent
+    monkeypatch.setitem(sys.modules, "trace_use.tools", fake_tools)
+    from trace_use import tool_agent
     a = tool_agent()
     assert hasattr(a, 'monitor') and a.monitor is None
 
 
 def test_tool_agent_monitor_settable(monkeypatch):
     import sys
-    fake_tools = type(sys)("tools")
+    fake_tools = type(sys)("trace_use.tools")
     fake_tools.TOOL_DEFINITIONS = []
     fake_tools.dispatch = lambda name, inp: ""
-    monkeypatch.setitem(sys.modules, "tools", fake_tools)
-    from agents import tool_agent
+    monkeypatch.setitem(sys.modules, "trace_use.tools", fake_tools)
+    from trace_use import tool_agent
     a = tool_agent()
     sentinel = object()
     a.monitor = sentinel

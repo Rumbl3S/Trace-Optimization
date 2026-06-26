@@ -29,8 +29,8 @@ import numpy as np
 _ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from agents import build_embedder, haiku, tool_agent
-from brain import BrainAgent
+from trace_use import build_embedder, haiku, tool_agent
+from trace_use import BrainAgent
 from eval.viz_brain import BrainViz
 
 OUT       = _ROOT / "eval" / "results"
