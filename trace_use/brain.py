@@ -95,6 +95,114 @@ class _StoredCode:
     metadata: str = ""
 
 
+@dataclass
+class _FailurePattern:
+    """One extracted logical failure reason with its embedding."""
+    reason:  str          # "agent defined Flask routes but never created HTML templates"
+    signal:  str          # "what to look for in future runs to detect this recurrence"
+    vec:     np.ndarray   # embedding of reason + signal (for kNN matching)
+    task:    str = ""
+
+
+# ── Logical failure store ─────────────────────────────────────────────────────
+
+class LogicalFailureStore:
+    """Stores LLM-extracted failure REASONS, not trace embeddings.
+
+    When a task fails, an LLM call extracts the specific logical error —
+    'agent defined Flask routes but never created the HTML template' —
+    and stores its embedding. Future runs are checked against these extracted
+    reasons, not against raw trace text.
+
+    This is logic detection, not keyword matching:
+    - Trajectory kNN sees: 'these sentences are similar' (surface form)
+    - LogicalFailureStore sees: 'this code is missing the same step that
+      caused failure before' (causal structure)
+    """
+
+    _EXTRACT_PROMPT = (
+        "An LLM agent failed the following task. Analyze the trace and identify "
+        "the specific logical error, missing step, or wrong assumption.\n\n"
+        "Task: {task}\n\n"
+        "Trace (last 2000 chars):\n{trace}\n\n"
+        "Reply in EXACTLY this format (two lines, no extra text):\n"
+        "REASON: <one sentence — what specific thing went wrong or was missing>\n"
+        "SIGNAL: <one sentence — what pattern in future code/reasoning would indicate "
+        "this same error is happening again>"
+    )
+
+    def __init__(self, embedder: Callable, threshold: float = 0.60):
+        self._embedder  = embedder
+        self._threshold = threshold
+        self._patterns: list[_FailurePattern] = []
+        self._lock      = threading.Lock()
+
+    def extract_and_store(
+        self, trace: str, task: str = "",
+        model: str = "claude-haiku-4-5-20251001",
+    ) -> str | None:
+        """Call an LLM to extract the failure reason, then store it.
+
+        Runs in a background thread so it never blocks the session loop.
+        Returns the extracted reason string, or None on failure.
+        """
+        from . import agents as _ag
+        prompt = self._EXTRACT_PROMPT.format(
+            task=task[:300],
+            trace=trace[-2000:],
+        )
+        try:
+            raw, _ = _ag._anthropic_call(prompt, model=model, max_tokens=200)
+            reason = signal = ""
+            for line in raw.splitlines():
+                if line.startswith("REASON:"):
+                    reason = line[len("REASON:"):].strip()
+                elif line.startswith("SIGNAL:"):
+                    signal = line[len("SIGNAL:"):].strip()
+            if not reason:
+                return None
+            combined = f"{reason} {signal}"
+            vec = np.asarray(self._embedder([combined])[0], dtype="float32")
+            with self._lock:
+                self._patterns.append(_FailurePattern(
+                    reason=reason, signal=signal, vec=vec, task=task[:120],
+                ))
+            return reason
+        except Exception:
+            return None
+
+    def query(self, text: str) -> tuple[str | None, float | None]:
+        """Check whether text matches a known logical failure pattern.
+
+        Returns (warning_message, similarity) or (None, None).
+        The warning names the specific error, not just 'reconsider approach'.
+        """
+        with self._lock:
+            if not self._patterns:
+                return None, None
+            patterns = list(self._patterns)
+
+        vec  = np.asarray(self._embedder([text[-1500:]])[0], dtype="float32")
+        best_sim, best = max(
+            ((float(np.dot(vec, p.vec)), p) for p in patterns),
+            key=lambda x: x[0],
+        )
+        if best_sim < self._threshold:
+            return None, None
+
+        msg = (
+            f"Known failure pattern detected (similarity {best_sim:.0%}):\n"
+            f"  WHAT WENT WRONG BEFORE: {best.reason}\n"
+            f"  WATCH FOR: {best.signal}"
+        )
+        return msg, best_sim
+
+    @property
+    def n_patterns(self) -> int:
+        with self._lock:
+            return len(self._patterns)
+
+
 # ── Trajectory store ──────────────────────────────────────────────────────────
 
 class TrajectoryStore:
@@ -432,9 +540,11 @@ class BrainAgent:
         self._check_interval = check_interval
         self._min_chars      = min_chars
 
-        # Two stores: trajectory-level and code-snippet-level
-        self._traj_store = TrajectoryStore(embedder, k=k, threshold=threshold)
-        self._code_store = FailureStore(embedder, k=k, threshold=threshold)
+        # Three stores: trajectory-level, code-snippet-level, logical failure reasons
+        self._traj_store    = TrajectoryStore(embedder, k=k, threshold=threshold)
+        self._code_store    = FailureStore(embedder, k=k, threshold=threshold)
+        self._logic_store   = LogicalFailureStore(embedder)   # LLM-extracted failure reasons
+        self._current_task_str: str = ""   # task description for failure extraction
 
         # Streaming buffer (push/should_bail interface for tool_agent / streaming_agent)
         self._buffer  = ""
@@ -450,6 +560,11 @@ class BrainAgent:
         self._last_code_warning:  str          = ""
         self._code_interventions: int          = 0
 
+        # Stall detector — fires when agent makes consecutive empty/no-output tool calls
+        self._stall_streak:       int          = 0   # consecutive unproductive calls
+        self._stall_threshold:    int          = 2   # fire after this many in a row
+        self._stall_fired:        bool         = False
+
         # Trajectory visualization
         self._trajectory:   list[TrajectoryPoint] = []
         self._traj_lock     = threading.Lock()
@@ -460,7 +575,8 @@ class BrainAgent:
 
     # ── task registration ─────────────────────────────────────────────────────
 
-    def set_task(self, task_idx: int, probe_fn: Callable | None = None) -> None:
+    def set_task(self, task_idx: int, probe_fn: Callable | None = None,
+                 task: str = "") -> None:
         """Register the current task index and optional deterministic probe.
 
         probe_fn(ns: dict) -> list[str]
@@ -477,32 +593,99 @@ class BrainAgent:
     # ── on_tool_call: core intervention hook ──────────────────────────────────
 
     def on_tool_call(self, name: str, input_dict: dict, result: str) -> str | None:
-        """Intercept every tool execution. No regex — receives raw input dict.
+        """Intercept every tool execution — any tool, any task type.
 
-        Returns a modified result string (original result + brain warning) when
-        the brain decides to intervene, or None to leave the result unchanged.
+        Returns a modified result string when the brain intervenes, or None to
+        leave the result unchanged. Fires at most 2 times per task.
 
-        Fires at most 2 times per task to avoid warning fatigue.
+        Signals (in priority order):
+          1. Stall detector    — consecutive empty/no-output calls (any tool, no prior data needed)
+          2. Probe tests       — deterministic unit tests (python_exec only)
+          3. Logical failure   — LLM-extracted reasons from past failures (any tool, any task)
+          4. Code snippet kNN  — past code similarity (python_exec only)
+          5. Trajectory kNN    — partial trace vs past run prefixes (any tool, any task type)
         """
-        if name != "python_exec":
-            return None
         if self._code_interventions >= 2:
             return None
 
-        code = (input_dict or {}).get("code", "") if isinstance(input_dict, dict) else ""
-        if not code:
+        is_no_output = not result or result.strip() in ("", "(no output)", "None")
+
+        # ── python_exec-specific fields ───────────────────────────────────────
+        code = ""
+        if name == "python_exec":
+            code = (input_dict or {}).get("code", "") if isinstance(input_dict, dict) else ""
+
+        # ── Stall detector (any tool) ─────────────────────────────────────────
+        # A call is unproductive if it has no meaningful input or no output.
+        no_input = not code if name == "python_exec" else not any(
+            str(v).strip() for v in (input_dict or {}).values()
+        )
+        if no_input or is_no_output:
+            self._stall_streak += 1
+            if self._stall_streak >= self._stall_threshold and not self._stall_fired:
+                self._stall_fired        = True
+                self._code_interventions += 1
+                msg = (
+                    f"[BRAIN — STALL DETECTED after {self._stall_streak} unproductive calls]\n"
+                    f"Your last {self._stall_streak} '{name}' calls produced no meaningful "
+                    f"output. You are stuck. Stop and reconsider your approach:\n"
+                    f"  1. Do not repeat the same call with the same or empty inputs.\n"
+                    f"  2. Try a fundamentally different approach or break the problem down.\n"
+                    f"  3. If writing code: produce one complete, self-contained implementation.\n"
+                    f"Make your next call count."
+                )
+                self._last_code_warning = msg
+                return f"{result}\n\n{msg}" if result else msg
             return None
+        else:
+            self._stall_streak = 0
 
-        # 1. Deterministic probe tests on the actual code
-        probe_fails = self._run_probe(code)
+        # ── Accumulate partial trace (any tool) ───────────────────────────────
+        input_summary = code if name == "python_exec" else str(input_dict or "")[:500]
+        self._pending_trace += f"\n[tool:{name}]\n{input_summary}\n[result]\n{result[:1000]}\n"
 
-        # 2. kNN over past code snippets
-        p_fail, knn_warning = self._code_store.query(code[:2000])
+        # ── Probe + code kNN (python_exec only) ───────────────────────────────
+        probe_fails: list[str] = []
+        p_code:      float | None = None
+        knn_warning: str   | None = None
+        if name == "python_exec" and code:
+            probe_fails         = self._run_probe(code)
+            p_code, knn_warning = self._code_store.query(code[:2000])
 
-        # When a deterministic probe is registered, let it be authoritative:
-        # empty probe_fails = code is verified correct, never intervene.
-        # Only fall back to kNN when no probe exists for this task.
-        if self._task_probe_fn is not None:
+        # ── Logical failure pattern check (any tool, any task type) ───────────
+        # Compares current code/result against LLM-extracted failure reasons from
+        # past failed tasks. Names the specific logical error, not just similarity.
+        if not probe_fails:
+            check_text = code if code else (result[:1500] if result else "")
+            logic_warning, logic_sim = self._logic_store.query(check_text)
+            if logic_warning and not knn_warning:
+                knn_warning = logic_warning
+                # Convert similarity to a P(fail) estimate
+                if p_code is None:
+                    p_code = logic_sim
+
+        # ── Trajectory prefix kNN + Markov (any tool, any task type) ─────────
+        # Suppress until enough examples exist — below 10 the signal is noise.
+        p_traj, traj_warning = (
+            self._traj_store.predict(self._pending_trace)
+            if len(self._traj_store._runs) >= 10
+            else (None, None)
+        )
+
+        # Combine signals
+        if p_traj is not None and p_code is not None:
+            p_fail      = 0.55 * p_traj + 0.45 * p_code
+            knn_warning = traj_warning or knn_warning
+        elif p_traj is not None:
+            p_fail      = p_traj
+            knn_warning = traj_warning
+        else:
+            p_fail = p_code
+
+        # ── Fire decision ─────────────────────────────────────────────────────
+        # Probe is authoritative when registered — empty probe_fails = verified correct.
+        # Fall back to kNN when no probe exists.
+        if self._task_probe_fn is not None and name == "python_exec":
             fired = bool(probe_fails)
         else:
             fired = p_fail is not None and p_fail >= self._traj_store._threshold
@@ -527,12 +710,46 @@ class BrainAgent:
         self._code_interventions += 1
 
         pf_str = f"{p_fail:.0%}" if p_fail is not None else "?"
+        suffix = (
+            "Fix the specific issue above then call python_exec again with the corrected code."
+            if name == "python_exec"
+            else "Reconsider your approach based on the warning above before continuing."
+        )
+        return f"{result}\n\n[BRAIN — P(fail)={pf_str}]\n{warning}\n{suffix}"
+
+    def on_chunk(self, text: str) -> str | None:
+        """Hook for text-only tasks with no tool calls.
+
+        Call this with each new chunk of the agent's output (or the full
+        response so far). The brain accumulates it and queries the trajectory
+        store every 200 tokens to check whether the reasoning looks like a
+        past failure. Returns a warning string if P(fail) >= threshold, else None.
+
+        For streaming agents, call on every chunk. For non-streaming, call once
+        with the full response so far at natural checkpoints.
+        """
+        if self._code_interventions >= 2:
+            return None
+
+        self._pending_trace += text
+        self._current_turn  += 1
+
+        # Only query trajectory store every ~200 tokens to avoid embedding overhead
+        if self._current_turn % 5 != 0:
+            return None
+
+        p_traj, traj_warning = self._traj_store.predict(self._pending_trace)
+        if p_traj is None or p_traj < self._traj_store._threshold:
+            return None
+
+        self._last_code_warning  = traj_warning or ""
+        self.last_p_fail         = p_traj
+        self._code_interventions += 1
+        pf_str = f"{p_traj:.0%}"
         return (
-            f"{result}\n\n"
-            f"[BRAIN — P(fail)={pf_str}]\n"
-            f"{warning}\n"
-            f"Fix the specific issue above then call python_exec again immediately "
-            f"with the corrected complete implementation."
+            f"\n[BRAIN — P(fail)={pf_str}  trajectory looks like past failures]\n"
+            f"{traj_warning or 'This reasoning pattern has preceded failures before.'}\n"
+            f"Reconsider your approach."
         )
 
     def _run_probe(self, code: str) -> list[str]:
@@ -571,6 +788,68 @@ class BrainAgent:
                     break
         return "\n".join(parts) if parts else "This pattern has caused failures before — double-check correctness."
 
+    # ── wrap: one-line integration for any agent callable ─────────────────────
+
+    def wrap(self, agent_fn: Callable, verifier: Callable | None = None) -> Callable:
+        """Wrap any agent callable so the brain monitors every call automatically.
+
+        Works with any callable that takes a prompt string and returns either a
+        string or a (string, tokens) tuple — haiku, opus, tool_agent, or your
+        own function.
+
+        The wrapped agent:
+          - Resets brain state before each call
+          - Passes the full response through the trajectory store after each call
+          - Stores the result automatically when a verifier is provided
+          - Returns the same value as the original agent (transparent wrapper)
+
+        Without a verifier the brain accumulates traces but cannot label them —
+        call brain.store(trace, label) manually after evaluating the result.
+
+        Example::
+
+            brain  = BrainAgent(build_embedder())
+            agent  = brain.wrap(haiku)                  # text agent
+            agent  = brain.wrap(tool_agent(["python_exec"]))  # tool agent
+
+            # with auto-labeling
+            judge  = self_judge(judge_agent=opus)
+            agent  = brain.wrap(haiku, verifier=judge)
+        """
+        task_counter = [0]
+
+        def wrapped(prompt: str, **kwargs):
+            idx = task_counter[0]
+            self.set_task(idx, task=prompt[:300])
+            self._current_task_str = prompt[:300]
+            self.reset()
+
+            # For tool_agent the monitor hook fires on every tool call automatically.
+            # For plain text agents there are no tool calls — attach monitor here so
+            # on_tool_call is still wired if the agent supports it.
+            if hasattr(agent_fn, "monitor"):
+                agent_fn.monitor = self
+
+            result  = agent_fn(prompt, **kwargs)
+            trace   = result[0] if isinstance(result, tuple) else result
+            tokens  = result[1] if isinstance(result, tuple) else 0
+
+            # Pass the full response through trajectory store for between-task learning.
+            # (For tool_agent, on_tool_call already accumulated _pending_trace mid-run;
+            #  this call adds any remaining text and ensures the store is up to date.)
+            self.on_chunk(trace)
+
+            if verifier is not None:
+                label = 1 if verifier(prompt, trace) >= 0.5 else 0
+                self.store(trace, label)
+
+            task_counter[0] += 1
+            return result
+
+        wrapped._brain      = self       # expose brain for inspection
+        wrapped._task_count = task_counter
+        return wrapped
+
     # ── storage ───────────────────────────────────────────────────────────────
 
     def store(self, trace: str, label: int, metadata: str = "") -> None:
@@ -578,9 +857,18 @@ class BrainAgent:
 
         Call after every task. The trace is chunked and embedded; both the
         trajectory store (prefix-kNN + Markov) and the buffer are updated.
+
+        When label=0 (failure), automatically extracts the logical failure reason
+        in a background thread so future runs can be warned about the same mistake.
         """
         self._traj_store.add(trace, label, metadata)
         self._pending_trace = trace
+
+        if label == 0:
+            task = self._current_task_str
+            def _extract():
+                self._logic_store.extract_and_store(trace, task=task)
+            threading.Thread(target=_extract, daemon=True, name="brain-extract").start()
 
     def store_code(self, code: str, label: int, metadata: str = "") -> None:
         """Store a code snippet with its pass/fail label.
@@ -631,6 +919,8 @@ class BrainAgent:
         self._last_code_warning  = ""
         self._code_interventions = 0
         self._current_turn       = 0
+        self._stall_streak       = 0
+        self._stall_fired        = False
 
     def get_intervention(self) -> str | None:
         return self.last_warning
@@ -652,10 +942,17 @@ class BrainAgent:
 
         Call after a tool event for faster-than-timed-loop detection.
         Returns True if the brain decided to bail.
+
+        Bailing is suppressed until at least 10 trajectories are stored —
+        below that threshold the kNN has too few examples to be trustworthy
+        and will generate false positives that kill tasks prematurely.
         """
         with self._lock:
             buf = self._buffer
         if len(buf) < self._min_chars:
+            return False
+        # Don't bail on noise — require enough stored trajectories for signal
+        if len(self._traj_store._runs) < 10:
             return False
         p_fail, warning = self._traj_store.predict(buf)
         if p_fail is not None:
