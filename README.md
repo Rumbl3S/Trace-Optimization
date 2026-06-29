@@ -42,9 +42,25 @@ def cot_agent(prompt: str):
 
 ## The Brain (`brain.py`)
 
-`BrainAgent` attaches to a tool-use agent via a single hook called after every tool execution. It provides three independent failure signals:
+`BrainAgent` attaches to a tool-use agent via a single hook called after every tool execution. It provides five independent failure signals, applied in priority order:
 
-### Signal 1 — Probe tests (deterministic, fires immediately)
+### Signal 1 — Stall detector (fires immediately, no prior data needed)
+
+Detects when the agent is spinning — making consecutive tool calls with no meaningful output. After 2 empty calls in a row, the brain injects a hard redirect:
+
+```
+STOP. Your last 2 'python_exec' calls produced no meaningful output. You are stuck.
+  1. Do not repeat the same call with the same or empty inputs.
+  2. Try a fundamentally different approach or break the problem down.
+  3. If writing code: produce one complete, self-contained implementation.
+Make your next call count.
+```
+
+This works from the very first task with zero stored history. No warming up required.
+
+**Real-world example:** In a live working session, the brain was monitoring Haiku on a nutrient tracker task. The agent made several consecutive empty `python_exec({})` calls — no code, no output, just the same empty invocation repeated. The stall detector fired after two unproductive turns and redirected it. Haiku responded with a single complete implementation covering 30+ foods, daily macro tracking, progress bars, and a weekly summary view — and passed the judge. Without the intervention, the agent would have continued spinning.
+
+### Signal 2 — Probe tests (deterministic, fires from task 1)
 
 For each task, you register a `probe_fn(ns: dict) -> list[str]`. After the agent's first `python_exec` call, the brain re-runs the code in an isolated namespace and calls the probe. If the probe returns failures, it immediately injects specific corrective feedback into the tool result before the next LLM turn:
 
@@ -59,18 +75,37 @@ Fix the specific issue above then call python_exec again immediately.
 
 The agent reads this as the tool result and corrects the bug in the next turn. No re-prompting, no retry from scratch.
 
-### Signal 2 — kNN over stored code snippets (learned)
+### Signal 3 — Logical failure patterns (LLM-extracted, fires after first failure)
+
+This is the key distinction from embedding similarity. When a task fails and gets stored, the brain makes a background haiku call to extract *why* it failed:
+
+```
+REASON: Agent wrote Flask routes but never created the HTML templates required by render_template.
+SIGNAL: Look for render_template calls in Flask code without corresponding template file creation.
+```
+
+These extracted reasons — not the raw traces — are embedded and checked against future runs. When the current code matches the description of a past failure, the brain names the specific mistake:
+
+```
+Known failure pattern detected (similarity 71%):
+  WHAT WENT WRONG BEFORE: Agent wrote Flask routes but never created HTML templates.
+  WATCH FOR: render_template calls without corresponding template file creation.
+```
+
+This is logic detection, not keyword matching. Two traces can look semantically similar (both about web apps) but only one fires — the one that's missing the same step that caused a previous failure. Extraction runs in a background thread so it never blocks the session.
+
+### Signal 4 — kNN over stored code snippets (learned)
 
 A `FailureStore` keeps code-snippet embeddings with pass/fail labels. Every `python_exec` input is embedded and compared against stored snippets at query time. When P(fail) exceeds threshold, similar failed snippets surface as context — the agent can see which patterns caused failures before.
 
-### Signal 3 — Trajectory prefix kNN + Markov chain (learned)
+### Signal 5 — Trajectory prefix kNN + Markov chain (learned, activates after 10 stored runs)
 
 A `TrajectoryStore` stores completed runs as ordered sequences of chunk embeddings:
 
-- **Prefix kNN:** The mean embedding of the live trajectory's prefix is compared to the same-length prefix of each stored run. kNN fraction of failing runs → P(fail). Works from the first stored example.
+- **Prefix kNN:** The mean embedding of the live trajectory's prefix is compared to the same-length prefix of each stored run. kNN fraction of failing runs → P(fail).
 - **Markov state failure rate:** Once ≥ 30 chunks are stored, k-means discretizes all chunk embeddings into thought-state clusters. Each cluster tracks what fraction of runs visiting it eventually failed. Current chunk → nearest cluster → P(fail | state). Captures: *"models that reason this way tend to get the wrong answer."*
 
-The two learned signals combine: `p_fail = 0.55 × p_markov + 0.45 × p_prefix`.
+The two learned signals combine: `p_fail = 0.55 × p_markov + 0.45 × p_prefix`. Suppressed until 10 runs are stored to prevent false positives on sparse data.
 
 ### Wiring it up
 
@@ -114,19 +149,21 @@ for i, task in enumerate(tasks):
         brain.store_code(code, int(passed))
 ```
 
-The brain fires at most **2 times per task** to avoid flooding the agent with warnings. Probe tests fire on first-attempt bugs; kNN fires later in the run once enough failures accumulate.
+The brain fires at most **2 times per task** to avoid flooding the agent with warnings. The stall detector fires earliest (no data needed); probe tests fire on first-attempt bugs; logical failure patterns fire once at least one failure has been extracted; kNN fires later as the store fills.
 
 ### `BrainAgent` public API
 
 | Method | Description |
 |---|---|
-| `brain.set_task(idx, probe_fn=fn)` | Register the current task index and optional deterministic probe |
+| `brain.set_task(idx, probe_fn=fn, task="")` | Register the current task index, optional probe, and task description (used for failure extraction) |
 | `brain.reset()` | Clear buffer and intervention counter before a new task |
 | `brain.on_tool_call(name, input_dict, result)` | Hook called by `tool_agent` on every tool execution; returns modified result or `None` |
-| `brain.store(trace, label, metadata="")` | Store a completed run's full trajectory (label: 1=pass, 0=fail) |
+| `brain.store(trace, label, metadata="")` | Store a completed run; when `label=0`, automatically extracts failure reason in the background |
 | `brain.store_code(code, label, metadata="")` | Store a code snippet with its label |
+| `brain.wrap(agent_fn, verifier=None)` | Wrap any callable agent — handles `set_task`, `reset`, `store`, and auto-labeling transparently |
 | `brain.n_stored` | Total completed runs in the trajectory store |
 | `brain._code_interventions` | How many times the brain fired on the current task |
+| `brain._logic_store.n_patterns` | Number of extracted logical failure patterns accumulated so far |
 
 ### Storage invariant
 
@@ -655,7 +692,7 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 | Path | Role |
 |---|---|
 | `trace_use/pipeline.py` | Public API: `run_task`, `decompose`, `attempt`, `Forecaster`, `make_retriever`, all verifiers |
-| `trace_use/brain.py` | `BrainAgent`, `TrajectoryStore`, `FailureStore` — inference-time failure interception |
+| `trace_use/brain.py` | `BrainAgent`, `TrajectoryStore`, `FailureStore`, `LogicalFailureStore` — inference-time failure interception |
 | `trace_use/forecast.py` | Primitives: `knn_predict`, `knn_predict_cross`, `auc`, `spearman` |
 | `trace_use/display.py` | Rich live terminal display used by `run_task` |
 | `trace_use/agents.py` | `haiku`, `opus`, `tool_agent`, `streaming_agent`, `build_embedder` (lazy clients, keys from env/`.env`) |
@@ -678,7 +715,7 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 ## Limitations
 
 - **Probe tests need a known failure mode.** They catch localized bugs — a wrong formula, a missed edge case, a boundary condition. When the whole algorithm approach is wrong, probe feedback alone can't recover it (seen in the extensive benchmark: segment tree, Kruskal's MST).
-- **kNN signal needs warm-up.** The trajectory and code-snippet stores need ~50 traces with mixed outcomes before predictions are reliable. Probe tests work immediately; kNN fires later as failures accumulate.
+- **kNN signal needs warm-up.** The trajectory and code-snippet stores need ~50 traces with mixed outcomes before predictions are reliable. The stall detector and probe tests work immediately; logical failure patterns fire after the first stored failure; trajectory kNN activates after 10 stored runs.
 - **Trace richness is required.** One-liner responses produce near-identical embeddings regardless of correctness. Use a tool-calling agent or wrap any text model in a CoT prompt that forces step-by-step output.
 - **Verifier quality sets the ceiling.** Mislabeled traces corrupt the kNN store. Prefer programmatic checks; when using an LLM judge, always use a different model than the one being evaluated.
 - **Brain is most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare and marginal gains are small. Below ~60%, the store fills quickly with failures but the model may need a fundamentally different approach rather than mid-turn correction.
