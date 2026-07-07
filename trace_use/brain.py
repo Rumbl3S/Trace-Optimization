@@ -100,7 +100,7 @@ class _FailurePattern:
     """One extracted logical failure reason with its embedding."""
     reason:  str          # "agent defined Flask routes but never created HTML templates"
     signal:  str          # "what to look for in future runs to detect this recurrence"
-    vec:     np.ndarray   # embedding of reason + signal (for kNN matching)
+    vec:     np.ndarray   # embedding of SIGNAL only — describes code patterns, matches code
     task:    str = ""
 
 
@@ -122,16 +122,22 @@ class LogicalFailureStore:
 
     _EXTRACT_PROMPT = (
         "An LLM agent failed the following task. Analyze the trace and identify "
-        "the specific logical error, missing step, or wrong assumption.\n\n"
+        "the specific logical error, missing step, or wrong assumption that caused "
+        "the WRONG ANSWER or WRONG IMPLEMENTATION — not execution problems like "
+        "empty tool calls, truncation, or stalling.\n\n"
+        "IMPORTANT: Only extract domain-specific logic errors. Examples of what to extract:\n"
+        "  - 'Annualization used sqrt(365) instead of sqrt(252) for daily returns'\n"
+        "  - 'Tax bracket calculation applied the top rate to the entire income instead of just the top band'\n"
+        "  - 'Drawdown peak was not reset after a new high was reached'\n"
+        "If the failure is just empty code / truncation / stalling — reply with SKIP.\n\n"
         "Task: {task}\n\n"
         "Trace (last 2000 chars):\n{trace}\n\n"
-        "Reply in EXACTLY this format (two lines, no extra text):\n"
-        "REASON: <one sentence — what specific thing went wrong or was missing>\n"
-        "SIGNAL: <one sentence — what pattern in future code/reasoning would indicate "
-        "this same error is happening again>"
+        "Reply in EXACTLY this format:\n"
+        "REASON: <one sentence — the specific algorithmic/logical error>\n"
+        "SIGNAL: <one sentence — what to watch for in future code to catch this same error>"
     )
 
-    def __init__(self, embedder: Callable, threshold: float = 0.60):
+    def __init__(self, embedder: Callable, threshold: float = 0.45):
         self._embedder  = embedder
         self._threshold = threshold
         self._patterns: list[_FailurePattern] = []
@@ -152,17 +158,20 @@ class LogicalFailureStore:
             trace=trace[-2000:],
         )
         try:
-            raw, _ = _ag._anthropic_call(prompt, model=model, max_tokens=200)
+            raw, _ = _ag._anthropic_call(model, prompt, max_tokens=200)
+            if raw.strip().upper().startswith("SKIP"):
+                return None   # stall/execution failure — not a logic pattern worth storing
             reason = signal = ""
             for line in raw.splitlines():
                 if line.startswith("REASON:"):
                     reason = line[len("REASON:"):].strip()
                 elif line.startswith("SIGNAL:"):
                     signal = line[len("SIGNAL:"):].strip()
-            if not reason:
+            if not reason or not signal:
                 return None
-            combined = f"{reason} {signal}"
-            vec = np.asarray(self._embedder([combined])[0], dtype="float32")
+            # Embed the SIGNAL only — it describes code patterns to watch for,
+            # so it lives in the same semantic space as future agent code/output.
+            vec = np.asarray(self._embedder([signal])[0], dtype="float32")
             with self._lock:
                 self._patterns.append(_FailurePattern(
                     reason=reason, signal=signal, vec=vec, task=task[:120],
@@ -320,8 +329,15 @@ class TrajectoryStore:
         k    = min(self._k, len(runs))
         top  = np.argpartition(sims, -k)[-k:]
 
+        # Only use neighbours that are actually similar (min cosine ≥ 0.55).
+        # Without this floor, every query matches the top-k regardless of distance,
+        # causing false positives once enough runs are stored.
+        top = [i for i in top if sims[i] >= 0.55]
+        if not top:
+            return 0.0, None
+
         n_fail = sum(1 for i in top if runs[i].label == 0)
-        p_fail = n_fail / k
+        p_fail = n_fail / len(top)
 
         best: _StoredRun | None = None
         fail_pairs = [(runs[i], float(sims[i])) for i in top if runs[i].label == 0]
@@ -480,10 +496,16 @@ def _chunk_trace(trace: str) -> list[str]:
     return chunks
 
 
-def _build_traj_warning(p_fail: float, best_run: _StoredRun | None) -> str:
+def _build_traj_warning(
+    p_fail: float,
+    best_run: "_StoredRun | None",
+    logic_reason: str | None = None,
+) -> str:
     lines = [f"[BRAIN — P(fail)={p_fail:.0%}]  Trajectory resembles past failures."]
     if best_run and best_run.metadata:
         lines.append(f"  Most similar failed run: {best_run.metadata[:200]}")
+    if logic_reason:
+        lines.append(f"  Known failure pattern: {logic_reason}")
     lines.append("Reconsider your current approach before continuing.")
     return "\n".join(lines)
 
@@ -560,6 +582,10 @@ class BrainAgent:
         self._last_code_warning:  str          = ""
         self._code_interventions: int          = 0
 
+        # Turn tracking — lets callers see when the brain fired vs when stall started
+        self._turn_count:         int          = 0   # tool calls so far this task
+        self._fire_turn:          int | None   = None  # turn on which brain first fired
+
         # Stall detector — fires when agent makes consecutive empty/no-output tool calls
         self._stall_streak:       int          = 0   # consecutive unproductive calls
         self._stall_threshold:    int          = 2   # fire after this many in a row
@@ -608,6 +634,7 @@ class BrainAgent:
         if self._code_interventions >= 2:
             return None
 
+        self._turn_count += 1
         is_no_output = not result or result.strip() in ("", "(no output)", "None")
 
         # ── python_exec-specific fields ───────────────────────────────────────
@@ -625,6 +652,8 @@ class BrainAgent:
             if self._stall_streak >= self._stall_threshold and not self._stall_fired:
                 self._stall_fired        = True
                 self._code_interventions += 1
+                if self._fire_turn is None:
+                    self._fire_turn = self._turn_count
                 msg = (
                     f"[BRAIN — STALL DETECTED after {self._stall_streak} unproductive calls]\n"
                     f"Your last {self._stall_streak} '{name}' calls produced no meaningful "
@@ -635,6 +664,7 @@ class BrainAgent:
                     f"Make your next call count."
                 )
                 self._last_code_warning = msg
+                self.last_warning       = msg
                 return f"{result}\n\n{msg}" if result else msg
             return None
         else:
@@ -652,12 +682,13 @@ class BrainAgent:
             probe_fails         = self._run_probe(code)
             p_code, knn_warning = self._code_store.query(code[:2000])
 
-        # ── Logical failure pattern check (any tool, any task type) ───────────
-        # Compares current code/result against LLM-extracted failure reasons from
-        # past failed tasks. Names the specific logical error, not just similarity.
+        # ── Logical failure pattern check ─────────────────────────────────────
+        # Query with the agent's actual code/output — the SIGNAL embeddings describe
+        # code patterns ("look for period_return = (end - cashflow) / start"), so they
+        # match code text structurally, not topics. This works for any task type.
         if not probe_fails:
-            check_text = code if code else (result[:1500] if result else "")
-            logic_warning, logic_sim = self._logic_store.query(check_text)
+            check_text = (code or result[:1500] or "").strip()
+            logic_warning, logic_sim = self._logic_store.query(check_text) if check_text else (None, None)
             if logic_warning and not knn_warning:
                 knn_warning = logic_warning
                 # Convert similarity to a P(fail) estimate
@@ -671,6 +702,17 @@ class BrainAgent:
             if len(self._traj_store._runs) >= 10
             else (None, None)
         )
+
+        # Enrich trajectory warning with the closest extracted logic pattern.
+        # The logic store holds causal reasons ("TWR formula wrong: (end-cashflow)/start");
+        # query it against the current code/result so the PREDICT warning is specific.
+        if traj_warning and self._logic_store.n_patterns > 0:
+            check = (code or result[:1500] or "").strip()
+            if check:
+                logic_reason_msg, _ = self._logic_store.query(check)
+                if logic_reason_msg:
+                    # Append the specific known failure to the trajectory warning
+                    traj_warning = traj_warning + f"\n  {logic_reason_msg}"
 
         # Combine signals
         if p_traj is not None and p_code is not None:
@@ -704,8 +746,12 @@ class BrainAgent:
         if not fired:
             return None
 
+        if self._fire_turn is None:
+            self._fire_turn = self._turn_count   # record which turn the brain first fired
+
         warning = self._build_code_intervention(probe_fails, p_fail, knn_warning)
         self._last_code_warning  = warning
+        self.last_warning        = warning
         self.last_p_fail         = p_fail
         self._code_interventions += 1
 
@@ -919,6 +965,8 @@ class BrainAgent:
         self._last_code_warning  = ""
         self._code_interventions = 0
         self._current_turn       = 0
+        self._turn_count         = 0
+        self._fire_turn          = None
         self._stall_streak       = 0
         self._stall_fired        = False
 
