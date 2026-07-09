@@ -183,7 +183,7 @@ class LatentTrajectory:
 # ── Motif extraction from failed traces ──────────────────────────────────────────
 
 _EXTRACT_MOTIF_PROMPT = """\
-A Python implementation just failed. Extract a REUSABLE failure motif as JSON.
+A Python implementation just failed. Extract a reusable logical failure concept — NOT a regex, NOT a benchmark answer.
 
 TASK DESCRIPTION:
 {task}
@@ -196,55 +196,71 @@ FAILED CODE:
 FAILURE REASON:
 {reason}
 
-Output ONLY a JSON object with these fields (no markdown, no explanation):
+EXISTING KNOWN PATTERNS:
+{existing}
+
+---
+
+STEP 1 — Is this the same logical mistake as one of the existing patterns above?
+  If YES: set "update_id" to that pattern's id.
+  If NO:  set "update_id" to null and fill all fields.
+
+Output ONLY JSON (no markdown):
 {{
-  "id": "short_snake_case_id_max_4_words",
+  "update_id": null,
+  "id": "short_snake_case_4_words_max",
   "name": "Human-readable name 5-8 words",
-  "description": "One sentence: what logical principle is violated",
-  "surface_pattern": "Abstract Python regex matching the STRUCTURAL mistake — see rules below",
-  "neg_pattern": "Abstract Python regex matching the CORRECT form; empty string if none",
-  "task_keywords": ["2-4 words from the task prompt that scope when this error applies"],
-  "confidence": 0.85,
-  "recommendation": "Brief instruction fixing the structural mistake (1 line)"
+  "description": "One sentence: the logical principle violated — domain-agnostic, no variable names",
+  "required_condition": "What must the task explicitly state for this motif to apply? (e.g. 'task explicitly requires raising an error on missing required field', 'task explicitly requires tie-breaking when primary sort values are equal')",
+  "violation_condition": "What specific code or reasoning behavior shows the bug? (e.g. 'uses .get() with default instead of raising', 'sorts by single key with no secondary criterion')",
+  "recommendation": "Generalizable one-line fix — no variable names from this specific task",
+  "confidence": 0.85
 }}
 
-CRITICAL RULES FOR surface_pattern:
-- Replace ALL variable names with \\w+ (never use specific names like 'users', 'items')
-- Replace ALL string field names with ['\"]\\w+['\"] (never use 'score', 'price', 'email')
-- Match both sorted(...) and list.sort(...) forms if the bug applies to both
-- The pattern must match ANY code with this structural mistake, not just this specific code
-- Do NOT anchor to specific keywords or values that appear in this code by coincidence
-- Test mentally: would your pattern match if the dev used different variable names? It must.
-- surface_pattern must still match the failed code above (sanity check)
-- confidence: 0.80-0.92 only
-- Output ONLY the JSON object, nothing else
+RULES:
+- description and conditions must be domain-agnostic (no variable names, field names, or benchmark specifics)
+- required_condition must describe what the TASK must say, not what the code does
+- violation_condition must describe what the CODE/REASONING must do to indicate the bug
+- recommendation must generalize across domains
+- If you cannot name a concrete logical mistake, return {{}} (empty)
 """
 
-_MERGE_MOTIF_PROMPT = """\
-Two Python implementations failed with the same type of bug. Generalize their motif.
+_APPLICABILITY_JUDGE_PROMPT = """\
+A past failure pattern was learned. Decide if this EXACT bug is present in the code below.
 
-EXISTING MOTIF:
-  description: {description}
-  current_pattern: {old_pattern}
+TASK:
+{task}
 
-FIRST FAILURE CODE:
+AGENT REASONING:
+{reasoning}
+
+PROPOSED CODE:
 ```python
-{code1}
+{code}
 ```
 
-SECOND FAILURE CODE:
-```python
-{code2}
-```
+PATTERN:
+  Name: {motif_name}
+  Bug: {motif_description}
+  Applies when task says: {required_condition}
+  Code signature: {violation_condition}
+  Fix: {motif_recommendation}
 
-Write a SINGLE abstract regex that matches BOTH failures and generalizes to other code with this same structural mistake.
+STEPS:
+1. Find text in TASK or REASONING that satisfies "{required_condition}". Quote it exactly.
+2. Find a line in CODE that matches "{violation_condition}". Quote it exactly.
+3. If both found → applies=true, fill in the quotes and give a one-line fix.
+4. If either is missing → applies=false, leave quotes empty.
 
-Rules:
-- Use \\w+ for ALL variable names, never hardcode specific names
-- Use ['\"]\\w+['\"] for ALL string field/key names
-- Match both sorted() and .sort() if applicable
-- The merged pattern must match both code snippets above
-- Output ONLY JSON: {{"surface_pattern": "...", "neg_pattern": "..."}}
+Return JSON only (no markdown, no extra text after the closing brace):
+{{
+  "applies": <true|false>,
+  "confidence": <0.0-1.0>,
+  "requirement_quote": "<exact text from task/reasoning, or empty string>",
+  "violation_quote": "<exact code line, or empty string>",
+  "motif_match_explanation": "<one sentence>",
+  "recommendation": "<concrete one-line fix, or empty string>"
+}}
 """
 
 
@@ -877,7 +893,7 @@ class LogicalFailureStore:
 _CONCRETE_EVIDENCE_KINDS = frozenset({
     "constraint_violation", "plan_code_mismatch", "known_failure_motif",
     "runtime_error_pattern", "failed_probe", "repeated_stall", "static_code_bug",
-    "contradiction",
+    "contradiction", "applicability_judgment",
 })
 
 # Kinds and sources that are contextual signals only — never fire triggers.
@@ -890,6 +906,87 @@ _BANNED_SOURCES = frozenset({
     "task_similarity", "domain_similarity", "raw_trajectory_knn",
     "trajectory_store", "trajectory_loop", "trajectory_pulse",
 })
+
+# Words so common they carry no evidence weight in quote-grounding checks
+_STOPWORDS = frozenset({
+    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
+    "has", "have", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "that", "this", "it", "its", "not", "no",
+    "if", "then", "else", "each", "all", "any", "some", "only", "also",
+    "as", "than", "when", "where", "which", "who", "how", "what", "i",
+})
+
+# Phrases that signal the judge is speculating rather than quoting evidence
+_VAGUE_JUDGE_PHRASES = frozenset({
+    "task implies", "likely", "may need", "could fail", "should consider",
+    "similar to", "general requirement", "might", "possibly", "perhaps",
+    "seems like", "appears to", "probably", "suggests that", "would need",
+})
+
+
+def _validate_judge_result(
+    result: dict,
+    task: str,
+    code: str,
+    reasoning: str,
+    threshold: float = 0.50,
+) -> bool:
+    """Return True only when the judge produced a concrete, grounded proof.
+
+    Three things must all be present:
+      1. requirement_quote  — task/reasoning actually states the requirement
+      2. violation_quote    — code/reasoning shows the specific mistake
+      3. recommendation     — a concrete, non-trivial fix
+
+    Quotes are verified against the actual context text. Vague phrases ("task
+    implies", "likely", "could fail", etc.) are rejected even if confidence is
+    high, because they indicate speculation rather than evidence.
+    """
+    if not result.get("applies"):
+        return False
+    if float(result.get("confidence", 0)) < threshold:
+        return False
+
+    req_quote  = (result.get("requirement_quote")  or "").strip()
+    viol_quote = (result.get("violation_quote")     or "").strip()
+    rec        = (result.get("recommendation")      or "").strip()
+
+    # All three proof fields must be substantive
+    if not req_quote or not viol_quote or len(rec) < 10:
+        return False
+
+    # Reject speculative language in either quote
+    evidence_text = f"{req_quote} {viol_quote}".lower()
+    if any(phrase in evidence_text for phrase in _VAGUE_JUDGE_PHRASES):
+        return False
+
+    def _word_overlap(quote: str, target: str) -> float:
+        """Content-word overlap between quote and target (ignores stopwords)."""
+        q_words = set(re.findall(r"\w+", quote.lower())) - _STOPWORDS
+        if not q_words:
+            return 0.0
+        t_words = set(re.findall(r"\w+", target.lower()))
+        return len(q_words & t_words) / len(q_words)
+
+    task_r      = task.lower()
+    code_r      = code.lower()
+    reasoning_r = reasoning.lower()
+
+    # Requirement quote must be grounded in task or reasoning
+    req_in_context = (
+        req_quote.lower() in task_r
+        or req_quote.lower() in reasoning_r
+        or _word_overlap(req_quote, task_r + " " + reasoning_r) >= 0.70
+    )
+    # Violation quote must be grounded in code or reasoning
+    viol_in_context = (
+        viol_quote.lower() in code_r
+        or viol_quote.lower() in reasoning_r
+        or _word_overlap(viol_quote, code_r + " " + reasoning_r) >= 0.70
+    )
+
+    return req_in_context and viol_in_context
 
 
 @dataclass
@@ -906,15 +1003,18 @@ class BrainEvidence:
 @dataclass
 class FailureMotif:
     """An abstract failure pattern — not tied to any specific task or answer."""
-    id:              str
-    name:            str
-    description:     str
-    surface_pattern: str        # regex to find in code (case-insensitive); "" = semantic-only
-    neg_pattern:     str        # if this matches, motif does NOT apply; "" = no exclusion
-    task_keywords:   list[str]  # task or reasoning must mention ≥1; [] = always applies
-    confidence:      float
-    recommendation:  str
-    source:          str = "seed"
+    id:                  str
+    name:                str
+    description:         str
+    surface_pattern:     str        # regex to find in code (case-insensitive); "" = semantic-only
+    neg_pattern:         str        # if this matches, motif does NOT apply; "" = no exclusion
+    task_keywords:       list[str]  # task or reasoning must mention ≥1; [] = always applies
+    confidence:          float
+    recommendation:      str
+    source:              str   = "seed"
+    # Structured conditions for the applicability judge (learned motifs only)
+    required_condition:  str   = ""  # what the task must explicitly require
+    violation_condition: str   = ""  # what code/reasoning behavior shows the bug
 
 
 def make_intervention(evidence: list[BrainEvidence]) -> str:
@@ -958,162 +1058,169 @@ class MotifStore:
     def add_motif(self, motif: FailureMotif, signal_text: str = "") -> None:
         with self._lock:
             self._motifs.append(motif)
-            if signal_text and not motif.surface_pattern:
-                vec  = np.asarray(self._embedder([signal_text[:500]])[0], dtype='float32')
+            # Embed for retrieval: use signal_text if provided, else description+recommendation
+            # for learned motifs (no surface_pattern). Seeded motifs with patterns are
+            # matched by regex so don't need an embedding.
+            embed_text = signal_text or (
+                f"{motif.description} {motif.recommendation}"
+                if not motif.surface_pattern else ""
+            )
+            if embed_text:
+                vec  = np.asarray(self._embedder([embed_text[:600]])[0], dtype='float32')
                 norm = np.linalg.norm(vec)
                 if norm > 1e-9:
                     vec = vec / norm
                 self._sem_vecs.append((vec, motif))
 
+    def retrieve_candidates(
+        self, code: str, task: str, reasoning: str, top_k: int = 4,
+    ) -> "list[FailureMotif]":
+        """High-recall retrieval of learned motifs via embedding similarity.
+
+        Intentionally permissive — the applicability judge filters false positives.
+        Only considers motifs without surface_pattern (learned semantic motifs).
+        Seeded regex motifs are handled by the separate check() path.
+        """
+        with self._lock:
+            sem_vecs = [(v, m) for v, m in self._sem_vecs if m.source == "learned"]
+        if not sem_vecs:
+            return []
+        query = f"{task}\n{reasoning[-600:]}\n{code[:400]}"
+        qvec = np.asarray(self._embedder([query])[0], dtype='float32')
+        norm = np.linalg.norm(qvec)
+        if norm > 1e-9:
+            qvec /= norm
+        scored = sorted(
+            ((float(np.dot(qvec, v)), m) for v, m in sem_vecs),
+            reverse=True,
+        )
+        return [m for sim, m in scored[:top_k] if sim >= 0.35]
+
     def add_learned(self, trace: str, task: str = "", reason: str = "") -> None:
-        """Called after a real failure.
+        """Called after a real failure. Extracts a logical failure concept via LLM.
 
-        Attempts to extract a structured FailureMotif (regex surface pattern +
-        recommendation) via LLM. Falls back to LogicalFailureStore semantic
-        embedding if extraction fails or produces an invalid regex.
-
-        Dedup: if a similar motif already exists (description overlap > 60%),
-        merges into a broader pattern instead of adding a duplicate.
+        Motifs are description-based (no regex). The same LLM call decides whether
+        this is a new concept or an update to an existing one (update_id).
         """
         code = _extract_code_from_trace(trace)
-        motif = self._extract_motif_llm(code, task=task, reason=reason) if code else None
+        motif, update_id = (
+            self._extract_motif_llm(code, task=task, reason=reason) if code else (None, None)
+        )
         if motif is not None:
-            similar_idx = self._find_similar_motif(motif)
-            if similar_idx >= 0:
-                merged = self._merge_motifs(
-                    self._surface_motifs[similar_idx], motif, code
-                )
-                if merged is not None:
-                    self._surface_motifs[similar_idx] = merged
-                    print(f"[BRAIN MOTIF MERGED] {merged.id}: surface={merged.surface_pattern!r}")
-                else:
-                    # Merge failed — keep both; broader coverage is better than none
-                    self.add_motif(motif)
-                    print(f"[BRAIN MOTIF LEARNED] {motif.id}: surface={motif.surface_pattern!r}")
+            if update_id:
+                with self._lock:
+                    for i, existing in enumerate(self._motifs):
+                        if existing.id == update_id and existing.source == "learned":
+                            # Broaden the existing concept: refine description/recommendation
+                            # and re-embed with the updated text
+                            updated = FailureMotif(
+                                id                  = existing.id,
+                                name                = existing.name,
+                                description         = motif.description or existing.description,
+                                surface_pattern     = "",
+                                neg_pattern         = "",
+                                task_keywords       = [],
+                                confidence          = max(existing.confidence, motif.confidence),
+                                recommendation      = motif.recommendation or existing.recommendation,
+                                source              = "learned",
+                                required_condition  = motif.required_condition  or existing.required_condition,
+                                violation_condition = motif.violation_condition or existing.violation_condition,
+                            )
+                            self._motifs[i] = updated
+                            # Re-embed with updated description so retrieval reflects the broader concept
+                            embed_text = f"{updated.description} {updated.recommendation}"
+                            vec = np.asarray(self._embedder([embed_text[:600]])[0], dtype='float32')
+                            norm = np.linalg.norm(vec)
+                            if norm > 1e-9:
+                                vec /= norm
+                            # Replace the old embedding entry for this motif
+                            self._sem_vecs = [
+                                (v, m) for v, m in self._sem_vecs if m.id != existing.id
+                            ]
+                            self._sem_vecs.append((vec, updated))
+                            print(f"[BRAIN MOTIF UPDATED] {existing.id}: {updated.description!r}")
+                            break
+                    else:
+                        self.add_motif(motif)
+                        print(f"[BRAIN MOTIF LEARNED] {motif.id}: {motif.description!r}")
             else:
                 self.add_motif(motif)
-                print(f"[BRAIN MOTIF LEARNED] {motif.id}: surface={motif.surface_pattern!r}")
-        # Always keep semantic fallback — it helps with errors not captured by regex
+                print(f"[BRAIN MOTIF LEARNED] {motif.id}: {motif.description!r}")
         self._logic.extract_and_store(trace, task=task)
 
-    def _find_similar_motif(self, new_motif: "FailureMotif") -> int:
-        """Return index of an existing motif that describes the same bug, or -1."""
-        new_words = set(new_motif.description.lower().split())
-        for i, existing in enumerate(self._surface_motifs):
-            if existing.source != "learned":
-                continue  # never merge into seeded motifs
-            existing_words = set(existing.description.lower().split())
-            union = new_words | existing_words
-            if not union:
-                continue
-            overlap = len(new_words & existing_words) / len(union)
-            if overlap >= 0.55:
-                return i
-        return -1
 
-    def _merge_motifs(
-        self, old: "FailureMotif", new: "FailureMotif", new_code: str
-    ) -> "FailureMotif | None":
-        """Ask haiku to produce one abstract regex covering both old and new failures."""
+    def _extract_motif_llm(
+        self, code: str, task: str, reason: str,
+    ) -> "tuple[FailureMotif | None, str | None]":
+        """Call haiku once to both extract a motif AND decide if it matches an existing one.
+
+        Returns (motif, update_id) where:
+          - update_id is None  → add motif as new
+          - update_id is set   → replace the motif with that id's pattern with motif.surface_pattern
+          - (None, _)          → extraction failed or motif was rejected as too vague
+        """
         import json as _json
-        old_code = getattr(old, "_example_code", "")
-        if not old_code:
-            # No stored code for old motif — fall back to just broadening the old pattern
-            old_code = f"# (code that triggered: {old.surface_pattern})"
         try:
             from .agents import _anthropic_call
-            prompt = _MERGE_MOTIF_PROMPT.format(
-                description=old.description,
-                old_pattern=old.surface_pattern,
-                code1=old_code[:600],
-                code2=new_code[:600],
+        except ImportError:
+            return None, None
+
+        # Show existing learned motifs so the LLM can decide update_id vs. new
+        with self._lock:
+            learned = [m for m in self._motifs if m.source == "learned"]
+        if learned:
+            existing_lines = "\n".join(
+                f"  id={m.id!r}  description={m.description!r}"
+                for m in learned
             )
+        else:
+            existing_lines = "  (none yet)"
+
+        prompt = _EXTRACT_MOTIF_PROMPT.format(
+            task     = task[:400]   or "(not provided)",
+            code     = code[:800],
+            reason   = reason[:300] or "(not provided)",
+            existing = existing_lines,
+        )
+        try:
             text, _ = _anthropic_call("claude-haiku-4-5-20251001", prompt, max_tokens=300)
             text = text.strip()
             if text.startswith("```"):
                 text = re.sub(r"^```[a-z]*\n?", "", text)
                 text = re.sub(r"\n?```$", "", text)
             data = _json.loads(text)
-            surface = data.get("surface_pattern", "")
-            neg = data.get("neg_pattern", old.neg_pattern)
-            if not surface:
-                return None
-            re.compile(surface)
-            if neg:
-                re.compile(neg)
-            # Merged pattern must match BOTH code examples
-            if not re.search(surface, new_code, re.IGNORECASE):
-                return None
-            merged = FailureMotif(
-                id=old.id,
-                name=old.name,
-                description=old.description,
-                surface_pattern=surface,
-                neg_pattern=neg or "",
-                task_keywords=list(set(old.task_keywords) | set(new.task_keywords)),
-                confidence=max(old.confidence, new.confidence),
-                recommendation=old.recommendation,
-                source="learned",
-            )
-            merged._example_code = new_code  # store latest failure code
-            return merged
         except Exception:
-            return None
+            return None, None
 
-    def _extract_motif_llm(
-        self, code: str, task: str, reason: str,
-    ) -> "FailureMotif | None":
-        """Call haiku to extract a structured FailureMotif from a failed code snippet."""
-        import json as _json
-        try:
-            from .agents import _anthropic_call
-        except ImportError:
-            return None
+        desc      = str(data.get("description", "")).strip()
+        update_id = data.get("update_id") or None
 
-        prompt = _EXTRACT_MOTIF_PROMPT.format(
-            task=task[:400] or "(not provided)",
-            code=code[:800],
-            reason=reason[:300] or "(not provided)",
-        )
-        try:
-            text, _ = _anthropic_call("claude-haiku-4-5-20251001", prompt, max_tokens=400)
-            text = text.strip()
-            # Strip markdown fences if present
-            if text.startswith("```"):
-                text = re.sub(r"^```[a-z]*\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-            data = _json.loads(text)
-        except Exception:
-            return None
+        if not desc:
+            return None, None
 
-        surface = data.get("surface_pattern", "")
-        neg     = data.get("neg_pattern", "")
-        if not surface:
-            return None
-        # Validate regex patterns before using them
-        try:
-            re.compile(surface)
-            if neg:
-                re.compile(neg)
-        except re.error:
-            return None
-        # Sanity check: surface pattern must actually match the bad code
-        if not re.search(surface, code, re.IGNORECASE):
-            return None
+        # Reject descriptions naming symptoms rather than logical mistakes
+        _vague = {"incomplete", "truncation", "truncated", "partial", "placeholder",
+                  "stub", "unfinished", "missing implementation", "todo"}
+        if any(w in desc.lower() for w in _vague):
+            return None, None
+
+        req_cond  = str(data.get("required_condition",  "")).strip()
+        viol_cond = str(data.get("violation_condition", "")).strip()
 
         motif = FailureMotif(
-            id              = str(data.get("id", "learned"))[:40],
-            name            = str(data.get("name", "Learned motif"))[:80],
-            description     = str(data.get("description", ""))[:200],
-            surface_pattern = surface,
-            neg_pattern     = neg,
-            task_keywords   = [str(k) for k in data.get("task_keywords", [])[:6]],
-            confidence      = max(0.70, min(0.92, float(data.get("confidence", 0.82)))),
-            recommendation  = str(data.get("recommendation", ""))[:300],
-            source          = "learned",
+            id                  = str(data.get("id", "learned"))[:40],
+            name                = str(data.get("name", "Learned motif"))[:80],
+            description         = desc[:250],
+            surface_pattern     = "",
+            neg_pattern         = "",
+            task_keywords       = [],
+            confidence          = max(0.70, min(0.92, float(data.get("confidence", 0.82)))),
+            recommendation      = str(data.get("recommendation", ""))[:300],
+            source              = "learned",
+            required_condition  = req_cond[:300],
+            violation_condition = viol_cond[:300],
         )
-        motif._example_code = code  # stored for merge dedup
-        return motif
+        return motif, update_id
 
     def check(
         self, code: str, task: str, reasoning: list,
@@ -1652,6 +1759,62 @@ class BrainAgent:
             )
             self._motif_store.add_motif(motif)
 
+    # ── applicability judge ───────────────────────────────────────────────────
+
+    def _run_applicability_judge(
+        self, motif: "FailureMotif", code: str, task: str, reasoning: str,
+    ) -> "dict | None":
+        """Ask haiku whether a retrieved motif actually applies to this specific run.
+
+        Receives the full context (task + reasoning + code) and must cite concrete
+        evidence — domain similarity alone is rejected. Returns a dict with
+        applies/confidence/evidence/recommendation, or None on error.
+        """
+        try:
+            from .agents import _anthropic_call
+        except ImportError:
+            return None
+
+        prompt = _APPLICABILITY_JUDGE_PROMPT.format(
+            task                 = task[:500]       or "(not provided)",
+            reasoning            = reasoning[-900:] if reasoning else "(no reasoning yet)",
+            code                 = code[:700],
+            motif_name           = motif.name,
+            motif_description    = motif.description,
+            required_condition   = motif.required_condition  or motif.description,
+            violation_condition  = motif.violation_condition or "(see description)",
+            motif_recommendation = motif.recommendation,
+        )
+        try:
+            import json as _json
+            text, _ = _anthropic_call("claude-haiku-4-5-20251001", prompt, max_tokens=320)
+            text = text.strip()
+            if text.startswith("```"):
+                text = re.sub(r"^```[a-z]*\n?", "", text)
+                text = re.sub(r"\n?```$", "", text)
+            # Extract first complete JSON object; ignore any text after closing brace
+            start = text.find("{")
+            if start >= 0:
+                depth, end = 0, start
+                for i, ch in enumerate(text[start:]):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = start + i + 1
+                            break
+                text = text[start:end]
+            result = _json.loads(text)
+            print(f"[BRAIN JUDGE RAW] motif={motif.id!r} applies={result.get('applies')} "
+                  f"conf={result.get('confidence', 0):.2f} "
+                  f"req={result.get('requirement_quote','')[:50]!r} "
+                  f"viol={result.get('violation_quote','')[:50]!r}")
+            return result
+        except Exception as e:
+            print(f"[BRAIN JUDGE ERROR] motif={motif.id!r} parse_error={e!r}")
+            return None
+
     # ── before_tool_call: pre-execution prediction ────────────────────────────
 
     def before_tool_call(self, name: str, input_dict: dict) -> str | None:
@@ -1678,33 +1841,72 @@ class BrainAgent:
         if not code.strip():
             return None
 
-        # Collect specific, current-code evidence only — no learned semantic signals
+        # ── 1. Seeded-motif regex + constraint + plan-code checks ────────────────
         evidence: list[BrainEvidence] = []
         evidence += self._constraint_checker.check(self._current_task_str, code)
         evidence += self._plan_code_checker.check(self._live_steps, code)
         evidence += self._motif_store.check(
             code=code, task=self._current_task_str, reasoning=self._live_steps,
-            include_learned=False,   # no domain-prior semantic signals here
+            include_learned=False,   # seeded regex motifs only — learned handled below
         )
 
-        # Gate: must have at least one specific, actionable, high-confidence piece
-        # of evidence that names a concrete mistake in THIS code.
-        has_specific = any(
+        # ── 2. Applicability judge for learned motifs ─────────────────────────
+        # Trajectory text is evidence INPUT to the judge, never a trigger by itself.
+        reasoning_text = "\n".join(s.text for s in self._live_steps)
+        candidates = self._motif_store.retrieve_candidates(
+            code=code, task=self._current_task_str, reasoning=reasoning_text,
+        )
+        for motif in candidates:
+            try:
+                result = self._run_applicability_judge(
+                    motif, code, self._current_task_str, reasoning_text
+                )
+            except Exception:
+                result = None
+            if result is None:
+                continue
+            # Deterministic validation: requires concrete quoted proof before adding evidence
+            if not _validate_judge_result(
+                result, self._current_task_str, code, reasoning_text, self._fire_threshold
+            ):
+                print(f"[BRAIN JUDGE REJECTED] motif={motif.id!r} "
+                      f"req={result.get('requirement_quote','')[:50]!r} "
+                      f"viol={result.get('violation_quote','')[:50]!r}")
+                continue
+            ev = BrainEvidence(
+                kind       = "applicability_judgment",
+                confidence = float(result["confidence"]),
+                message    = (f"{motif.name}: req={result.get('requirement_quote','')[:60]} | "
+                              f"viol={result.get('violation_quote','')[:60]}"),
+                source     = f"judgment:{motif.id}",
+                actionable = True,
+                data       = {
+                    "recommendation":   result.get("recommendation", motif.recommendation),
+                    "requirement_quote": result.get("requirement_quote", ""),
+                    "violation_quote":   result.get("violation_quote", ""),
+                },
+            )
+            evidence.append(ev)
+            print(f"[BRAIN JUDGE ACCEPTED] motif={motif.id!r} conf={result['confidence']:.2f} "
+                  f"req={result.get('requirement_quote','')[:60]!r} "
+                  f"viol={result.get('violation_quote','')[:60]!r}")
+            break
+
+        # ── 3. Gate: concrete proof required — p_traj amplifies only after proof ──
+        has_proof = any(
             e.actionable
             and e.confidence >= 0.70
             and e.kind in _CONCRETE_EVIDENCE_KINDS
-            and e.source not in _BANNED_SOURCES
+            and e.source.split(":")[0] not in _BANNED_SOURCES
             for e in evidence
         )
-        if not has_specific:
+        if not has_proof:
             return None
 
-        # p_fail from trajectory kNN: amplifies but does not trigger
+        # p_traj can only amplify an existing proof — cannot compensate for missing proof
         p_traj: float = 0.0
         if self._live_steps and len(self._traj_store._runs) >= 3:
-            p_knn, _, _, _ = self._traj_store.predict_with_context(
-                "\n".join(s.text for s in self._live_steps)
-            )
+            p_knn, _, _, _ = self._traj_store.predict_with_context(reasoning_text)
             if p_knn is not None:
                 p_traj = p_knn
 
@@ -2103,6 +2305,7 @@ class BrainAgent:
                 text=text[:300], vec=vec, drift=drift,
                 step_type=_classify_step(text), index=len(self._live_steps),
             ))
+
 
     @property
     def should_bail(self) -> bool:

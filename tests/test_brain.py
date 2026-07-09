@@ -15,6 +15,7 @@ from trace_use.brain import (
     MotifStore,
     PlanCodeMismatchChecker,
     _CONCRETE_EVIDENCE_KINDS,
+    _validate_judge_result,
     make_intervention,
 )
 from trace_use.brain import LogicalFailureStore, LatentStep
@@ -402,3 +403,180 @@ def test_E_learned_motif_requires_exec_error():
     assert post is None, (
         f"on_tool_call fired on successful execution — learned motif leaked: {post!r}"
     )
+
+
+# ── Tests for _validate_judge_result and applicability judge strictness ────────
+
+# F: missing-data motif must NOT fire when task says all fields are present
+def test_F_missing_data_motif_no_fire_when_all_fields_present():
+    """If the task guarantees all fields exist, a 'missing field' motif must be rejected.
+
+    We simulate a judge result where requirement_quote tries to claim the task
+    'implies' missing fields — the vague-phrase gate must block it.
+    """
+    task      = "Each user has name and score; rank users by score"
+    code      = "sorted(users, key=lambda u: u['score'], reverse=True)"
+    reasoning = "I will sort users by score field directly."
+
+    # Judge output that over-generalises: uses a vague phrase in the evidence
+    result_vague = {
+        "applies": True,
+        "confidence": 0.80,
+        "requirement_quote": "task implies required fields may be missing",
+        "violation_quote":   "u['score'] will raise KeyError if missing",
+        "motif_match_explanation": "possible missing key",
+        "recommendation":    "use .get('score', 0) to be safe",
+    }
+    assert not _validate_judge_result(result_vague, task, code, reasoning, threshold=0.50), (
+        "Vague 'task implies' phrase must be rejected by _validate_judge_result"
+    )
+
+
+# G: missing-data motif DOES fire when task explicitly requires error-raising
+def test_G_missing_data_motif_fires_with_explicit_requirement():
+    """When task says 'Raise ValueError if required field missing' and code silently
+    swallows the absence with .get(default), the judge output with concrete quotes
+    must pass _validate_judge_result.
+    """
+    task      = "Process records. Raise ValueError if the 'email' field is missing."
+    code      = "email = record.get('email', '')\nsend_email(email)"
+    reasoning = "I will use .get to retrieve the email field with a default."
+
+    result_concrete = {
+        "applies": True,
+        "confidence": 0.85,
+        "requirement_quote": "Raise ValueError if the 'email' field is missing",
+        "violation_quote":   "email = record.get('email', '')",
+        "motif_match_explanation": "code swallows missing field instead of raising",
+        "recommendation":    "if 'email' not in record: raise ValueError('email missing')",
+    }
+    assert _validate_judge_result(result_concrete, task, code, reasoning, threshold=0.50), (
+        "Concrete, grounded proof must be accepted by _validate_judge_result"
+    )
+
+
+# H: secondary-sort motif must NOT fire when task has no tiebreak requirement
+def test_H_secondary_sort_no_fire_without_tiebreak_requirement():
+    """'Sort users by name' has no tiebreak requirement. A judge that fires here
+    is over-generalising — its requirement_quote will be absent or vague.
+    """
+    task      = "Sort users by name"
+    code      = "sorted(users, key=lambda u: u['name'])"
+    reasoning = "Sort alphabetically by name field."
+
+    # Judge tries to fire but has no concrete requirement in the task
+    result_no_req = {
+        "applies": True,
+        "confidence": 0.75,
+        "requirement_quote": "",          # nothing to quote — task has no tiebreak
+        "violation_quote":   "sorted(users, key=lambda u: u['name'])",
+        "motif_match_explanation": "missing secondary key",
+        "recommendation":    "add tiebreak key",
+    }
+    assert not _validate_judge_result(result_no_req, task, code, reasoning, threshold=0.50), (
+        "Empty requirement_quote must be rejected — task imposes no tiebreak rule"
+    )
+
+
+# I: secondary-sort motif DOES fire when task explicitly requires tiebreak
+def test_I_secondary_sort_fires_with_explicit_tiebreak():
+    """Task says 'break ties alphabetically'; code uses single-key sort.
+    Concrete evidence must pass _validate_judge_result.
+    """
+    task      = "Sort users by score descending; break ties alphabetically by name"
+    code      = "sorted(users, key=lambda u: -u['score'])"
+    reasoning = "I'll sort by score in descending order using a negative key."
+
+    result_concrete = {
+        "applies": True,
+        "confidence": 0.88,
+        "requirement_quote": "break ties alphabetically by name",
+        "violation_quote":   "sorted(users, key=lambda u: -u['score'])",
+        "motif_match_explanation": "single-key sort ignores alphabetical tiebreak",
+        "recommendation":    "key=lambda u: (-u['score'], u['name'])",
+    }
+    assert _validate_judge_result(result_concrete, task, code, reasoning, threshold=0.50), (
+        "Explicit tiebreak requirement with matching violation must be accepted"
+    )
+
+
+# J: p_traj boost cannot cause fire when judge proof is missing
+def test_J_p_traj_boost_cannot_fire_without_proof():
+    """Even when p_traj is artificially high, before_tool_call must not fire
+    if the applicability judge returns no concrete proof (empty quotes).
+
+    We monkeypatch retrieve_candidates so the motif is a candidate (bypassing
+    _sem_vecs so the semantic check() path doesn't fire), then monkeypatch the
+    judge to return applies=True with empty quotes.
+    """
+    brain = _make_brain(threshold=0.50)
+
+    motif = FailureMotif(
+        id="test_motif", name="Test motif",
+        description="some bug description",
+        surface_pattern="", neg_pattern="", task_keywords=[],
+        confidence=0.9, recommendation="fix it",
+        source="learned",
+        required_condition="task must say X",
+        violation_condition="code must do Y",
+    )
+
+    # Inject the motif only into retrieve_candidates — NOT into _sem_vecs —
+    # so check() does not fire it through the semantic-similarity path.
+    brain._motif_store.retrieve_candidates = lambda **kwargs: [motif]
+
+    # Judge returns proof-free applies=True
+    brain._run_applicability_judge = lambda m, code, task, reasoning: {
+        "applies": True,
+        "confidence": 0.95,
+        "requirement_quote": "",    # no proof
+        "violation_quote":   "",    # no proof
+        "motif_match_explanation": "task implies this might apply",
+        "recommendation":    "check",
+    }
+    # Trajectory store returns near-certain failure
+    brain._traj_store.predict_with_context = lambda text: (0.99, None, None, None)
+
+    brain._current_task_str = "Sort users by name"
+    code = "sorted(users, key=lambda u: u['name'])"
+    result = brain.before_tool_call("python_exec", {"code": code})
+    assert result is None, (
+        f"p_traj + proof-free judge must not fire: {result!r}"
+    )
+
+
+# K: judge output with vague evidence phrases is rejected
+def test_K_vague_judge_phrases_rejected():
+    """All listed vague phrases in evidence text must cause _validate_judge_result
+    to return False, regardless of confidence and applies=True.
+    """
+    task      = "Process items and return results"
+    code      = "return [process(x) for x in items]"
+    reasoning = "I will iterate and process each item."
+
+    vague_phrases = [
+        "task implies",
+        "likely",
+        "may need",
+        "could fail",
+        "should consider",
+        "similar to",
+        "general requirement",
+        "might",
+        "possibly",
+        "perhaps",
+        "seems like",
+        "probably",
+    ]
+    for phrase in vague_phrases:
+        result = {
+            "applies": True,
+            "confidence": 0.90,
+            "requirement_quote": f"The task {phrase} require validation here",
+            "violation_quote":   "return [process(x) for x in items]",
+            "motif_match_explanation": "found a match",
+            "recommendation":    "add validation before processing",
+        }
+        assert not _validate_judge_result(result, task, code, reasoning, threshold=0.50), (
+            f"Vague phrase {phrase!r} in evidence must be rejected"
+        )

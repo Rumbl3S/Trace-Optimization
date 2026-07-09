@@ -1,28 +1,28 @@
 {
-  "timestamp": "2026-07-09T10:25:04",
+  "timestamp": "2026-07-09T22:14:14",
   "model": "claude-haiku-4-5-20251001",
   "mode": "brain-cold",
   "temperature": "configured",
   "n_tasks": 56,
   "metrics": {
-    "total_pass_rate": 1.0,
-    "first_fail_rate": 0.0,
-    "learnable_families": 0,
-    "motif_extraction_rate": 0.0,
+    "total_pass_rate": 0.8929,
+    "first_fail_rate": 0.25,
+    "learnable_families": 1,
+    "motif_extraction_rate": 1.0,
     "repeat_prevention_rate": 0.0,
     "false_positive_rate": 0.0,
-    "fires_on_pass_count": 0,
-    "missed_repeat_failures": 0,
-    "total_tokens": 180576,
-    "tokens_per_task": 3224.6,
-    "total_time_s": 432.7
+    "fires_on_pass_count": 2,
+    "missed_repeat_failures": 3,
+    "total_tokens": 176188,
+    "tokens_per_task": 3146.2,
+    "total_time_s": 568.3
   },
   "per_family": {
     "nested_key": {
       "disc_fail": 0,
-      "motif_learned": false,
+      "motif_learned": true,
       "rec_fired": 0,
-      "rec_pass": 4,
+      "rec_pass": 3,
       "rec_total": 4,
       "nm_fp": 0,
       "nm_total": 2
@@ -37,10 +37,10 @@
       "nm_total": 2
     },
     "api_key": {
-      "disc_fail": 0,
-      "motif_learned": false,
+      "disc_fail": 1,
+      "motif_learned": true,
       "rec_fired": 0,
-      "rec_pass": 4,
+      "rec_pass": 1,
       "rec_total": 4,
       "nm_fp": 0,
       "nm_total": 2
@@ -82,9 +82,9 @@
       "nm_total": 2
     },
     "retry_classification": {
-      "disc_fail": 0,
+      "disc_fail": 1,
       "motif_learned": false,
-      "rec_fired": 0,
+      "rec_fired": 2,
       "rec_pass": 4,
       "rec_total": 4,
       "nm_fp": 0,
@@ -100,8 +100,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2617,
-      "time_s": 6.5
+      "tokens": 2293,
+      "time_s": 6.6
     },
     {
       "name": "history_class",
@@ -111,19 +111,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2540,
-      "time_s": 5.7
+      "tokens": 1803,
+      "time_s": 4.0
     },
     {
       "name": "extract_items",
       "family": "api_key",
       "kind": "discovery",
-      "passed": true,
+      "passed": false,
       "fired": false,
-      "motif_learned": false,
-      "detail": "",
-      "tokens": 3932,
-      "time_s": 8.7
+      "motif_learned": true,
+      "detail": "should raise ValueError on error",
+      "tokens": 2535,
+      "time_s": 9.1
     },
     {
       "name": "validate_password",
@@ -133,8 +133,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2608,
-      "time_s": 5.0
+      "tokens": 2490,
+      "time_s": 6.0
     },
     {
       "name": "get_page",
@@ -144,8 +144,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3573,
-      "time_s": 7.0
+      "tokens": 2718,
+      "time_s": 10.3
     },
     {
       "name": "ms_to_seconds",
@@ -155,8 +155,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2047,
-      "time_s": 4.9
+      "tokens": 1839,
+      "time_s": 4.2
     },
     {
       "name": "rank_users",
@@ -166,19 +166,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2436,
-      "time_s": 5.0
+      "tokens": 2139,
+      "time_s": 12.3
     },
     {
       "name": "retry_request",
       "family": "retry_classification",
       "kind": "discovery",
-      "passed": true,
+      "passed": false,
       "fired": false,
       "motif_learned": false,
-      "detail": "",
-      "tokens": 5079,
-      "time_s": 11.5
+      "detail": "400 should not retry: expected 1 call, got 4",
+      "tokens": 2811,
+      "time_s": 8.8
     },
     {
       "name": "extract_phones",
@@ -188,8 +188,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2366,
-      "time_s": 6.2
+      "tokens": 2327,
+      "time_s": 17.6
     },
     {
       "name": "event_counter_class",
@@ -199,19 +199,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3324,
-      "time_s": 7.7
+      "tokens": 2318,
+      "time_s": 10.3
     },
     {
       "name": "get_next_cursor",
       "family": "api_key",
       "kind": "recurrence",
-      "passed": true,
+      "passed": false,
       "fired": false,
-      "motif_learned": false,
-      "detail": "",
-      "tokens": 3367,
-      "time_s": 7.2
+      "motif_learned": true,
+      "detail": "next_page key failed",
+      "tokens": 2864,
+      "time_s": 7.6
     },
     {
       "name": "validate_email",
@@ -221,8 +221,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3293,
-      "time_s": 7.3
+      "tokens": 14029,
+      "time_s": 27.7
     },
     {
       "name": "nth_item",
@@ -232,8 +232,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2490,
-      "time_s": 8.9
+      "tokens": 2344,
+      "time_s": 6.7
     },
     {
       "name": "cents_to_dollars",
@@ -243,8 +243,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2239,
-      "time_s": 4.9
+      "tokens": 1862,
+      "time_s": 4.3
     },
     {
       "name": "sort_products",
@@ -254,19 +254,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2423,
-      "time_s": 5.4
+      "tokens": 2226,
+      "time_s": 5.1
     },
     {
       "name": "retry_on_type",
       "family": "retry_classification",
       "kind": "recurrence",
       "passed": true,
-      "fired": false,
+      "fired": true,
       "motif_learned": false,
       "detail": "",
-      "tokens": 4039,
-      "time_s": 15.0
+      "tokens": 11636,
+      "time_s": 26.8
     },
     {
       "name": "extract_tags",
@@ -276,8 +276,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2221,
-      "time_s": 5.2
+      "tokens": 2512,
+      "time_s": 7.7
     },
     {
       "name": "simple_cache_class",
@@ -287,19 +287,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3340,
-      "time_s": 7.6
+      "tokens": 2443,
+      "time_s": 10.2
     },
     {
       "name": "get_total_count",
       "family": "api_key",
       "kind": "recurrence",
-      "passed": true,
+      "passed": false,
       "fired": false,
       "motif_learned": false,
-      "detail": "",
-      "tokens": 4361,
-      "time_s": 10.2
+      "detail": "n key failed",
+      "tokens": 2569,
+      "time_s": 13.9
     },
     {
       "name": "validate_username",
@@ -309,8 +309,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3499,
-      "time_s": 8.6
+      "tokens": 2835,
+      "time_s": 6.8
     },
     {
       "name": "rank_of",
@@ -320,8 +320,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3180,
-      "time_s": 6.9
+      "tokens": 2630,
+      "time_s": 9.9
     },
     {
       "name": "kb_to_bytes",
@@ -331,8 +331,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2228,
-      "time_s": 4.7
+      "tokens": 1799,
+      "time_s": 4.1
     },
     {
       "name": "sort_events",
@@ -342,8 +342,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 4985,
-      "time_s": 8.8
+      "tokens": 2249,
+      "time_s": 15.4
     },
     {
       "name": "retry_with_count",
@@ -353,19 +353,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 4004,
-      "time_s": 11.0
+      "tokens": 2848,
+      "time_s": 9.1
     },
     {
       "name": "extract_scores",
       "family": "nested_key",
       "kind": "recurrence",
-      "passed": true,
+      "passed": false,
       "fired": false,
-      "motif_learned": false,
-      "detail": "",
-      "tokens": 2264,
-      "time_s": 7.0
+      "motif_learned": true,
+      "detail": "got [95, 0, None]",
+      "tokens": 2163,
+      "time_s": 5.4
     },
     {
       "name": "budget_tracker_class",
@@ -375,19 +375,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3362,
-      "time_s": 9.1
+      "tokens": 2287,
+      "time_s": 13.0
     },
     {
       "name": "normalize_user",
       "family": "api_key",
       "kind": "recurrence",
-      "passed": true,
+      "passed": false,
       "fired": false,
       "motif_learned": false,
-      "detail": "",
-      "tokens": 16920,
-      "time_s": 34.3
+      "detail": "userId\u2192id mapping failed: {'userId': 3, 'name': 'Carol'}",
+      "tokens": 2674,
+      "time_s": 10.7
     },
     {
       "name": "validate_config",
@@ -397,8 +397,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3885,
-      "time_s": 8.4
+      "tokens": 3612,
+      "time_s": 12.5
     },
     {
       "name": "chunk_number",
@@ -408,8 +408,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2992,
-      "time_s": 7.0
+      "tokens": 3184,
+      "time_s": 7.2
     },
     {
       "name": "pct_to_decimal",
@@ -419,8 +419,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2330,
-      "time_s": 6.2
+      "tokens": 2047,
+      "time_s": 5.0
     },
     {
       "name": "sort_transactions",
@@ -430,19 +430,19 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2922,
-      "time_s": 6.8
+      "tokens": 2359,
+      "time_s": 6.2
     },
     {
       "name": "safe_request",
       "family": "retry_classification",
       "kind": "recurrence",
       "passed": true,
-      "fired": false,
+      "fired": true,
       "motif_learned": false,
       "detail": "",
-      "tokens": 4094,
-      "time_s": 9.7
+      "tokens": 12625,
+      "time_s": 36.5
     },
     {
       "name": "extract_city",
@@ -452,8 +452,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2925,
-      "time_s": 6.7
+      "tokens": 2389,
+      "time_s": 13.1
     },
     {
       "name": "task_queue_class",
@@ -463,8 +463,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3025,
-      "time_s": 8.0
+      "tokens": 2462,
+      "time_s": 13.4
     },
     {
       "name": "merge_response_lists",
@@ -474,8 +474,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3480,
-      "time_s": 7.7
+      "tokens": 2755,
+      "time_s": 6.6
     },
     {
       "name": "validate_sku",
@@ -485,8 +485,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2861,
-      "time_s": 6.6
+      "tokens": 2570,
+      "time_s": 5.8
     },
     {
       "name": "skip_n",
@@ -496,8 +496,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2993,
-      "time_s": 6.4
+      "tokens": 2604,
+      "time_s": 9.1
     },
     {
       "name": "bytes_to_mb",
@@ -507,8 +507,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2344,
-      "time_s": 4.7
+      "tokens": 2132,
+      "time_s": 4.8
     },
     {
       "name": "rank_leaderboard",
@@ -518,8 +518,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2455,
-      "time_s": 6.0
+      "tokens": 2710,
+      "time_s": 10.4
     },
     {
       "name": "idempotent_retry",
@@ -529,8 +529,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 5873,
-      "time_s": 20.5
+      "tokens": 6801,
+      "time_s": 34.0
     },
     {
       "name": "extract_ids",
@@ -540,8 +540,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2733,
-      "time_s": 6.1
+      "tokens": 2537,
+      "time_s": 9.3
     },
     {
       "name": "get_with_defaults",
@@ -551,8 +551,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2796,
-      "time_s": 6.9
+      "tokens": 2895,
+      "time_s": 7.6
     },
     {
       "name": "point_class",
@@ -562,8 +562,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2041,
-      "time_s": 7.8
+      "tokens": 2073,
+      "time_s": 5.2
     },
     {
       "name": "simple_counter_class",
@@ -573,8 +573,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2393,
-      "time_s": 5.2
+      "tokens": 2394,
+      "time_s": 10.0
     },
     {
       "name": "get_data_list",
@@ -584,8 +584,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2279,
-      "time_s": 6.0
+      "tokens": 2443,
+      "time_s": 5.8
     },
     {
       "name": "get_status",
@@ -595,8 +595,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 1958,
-      "time_s": 5.4
+      "tokens": 1894,
+      "time_s": 4.6
     },
     {
       "name": "first_error",
@@ -606,8 +606,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2758,
-      "time_s": 6.0
+      "tokens": 2828,
+      "time_s": 6.9
     },
     {
       "name": "is_valid_email",
@@ -617,8 +617,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2904,
-      "time_s": 7.2
+      "tokens": 5516,
+      "time_s": 9.9
     },
     {
       "name": "get_item_at",
@@ -628,8 +628,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3199,
-      "time_s": 6.9
+      "tokens": 3249,
+      "time_s": 14.9
     },
     {
       "name": "count_items",
@@ -640,7 +640,7 @@
       "motif_learned": false,
       "detail": "",
       "tokens": 1988,
-      "time_s": 4.6
+      "time_s": 4.9
     },
     {
       "name": "seconds_to_ms",
@@ -650,8 +650,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 1714,
-      "time_s": 4.4
+      "tokens": 1712,
+      "time_s": 3.8
     },
     {
       "name": "mb_to_bytes",
@@ -661,8 +661,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2049,
-      "time_s": 5.6
+      "tokens": 1944,
+      "time_s": 7.6
     },
     {
       "name": "sort_by_id",
@@ -672,8 +672,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2373,
-      "time_s": 5.1
+      "tokens": 2371,
+      "time_s": 7.3
     },
     {
       "name": "sort_by_name",
@@ -683,8 +683,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2529,
-      "time_s": 5.7
+      "tokens": 2821,
+      "time_s": 6.8
     },
     {
       "name": "retry_all",
@@ -694,8 +694,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 3687,
-      "time_s": 8.9
+      "tokens": 3737,
+      "time_s": 14.9
     },
     {
       "name": "try_once",
@@ -705,8 +705,8 @@
       "fired": false,
       "motif_learned": false,
       "detail": "",
-      "tokens": 2259,
-      "time_s": 5.8
+      "tokens": 2293,
+      "time_s": 10.7
     }
   ]
 }

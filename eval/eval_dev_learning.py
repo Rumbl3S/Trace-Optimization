@@ -1218,7 +1218,8 @@ def _make_tasks() -> list[Task]:
 
     tasks.append(Task("rank_users", "secondary_sort", "discovery",
         "Write `rank_users(users: list[dict]) -> list[dict]`. "
-        "Each user has 'name' and 'score'. Sort them highest score first. "
+        "Each user has 'name' and 'score'. Sort highest score first; "
+        "if scores are equal, sort alphabetically by name. "
         "Call python_exec to implement it.",
         _v_rank_users))
 
@@ -1245,7 +1246,8 @@ def _make_tasks() -> list[Task]:
 
     tasks.append(Task("sort_products", "secondary_sort", "recurrence",
         "Write `sort_products(products: list[dict]) -> list[dict]`. "
-        "Each product has 'name' and 'price'. Sort cheapest first. "
+        "Each product has 'name' and 'price'. Sort cheapest first; "
+        "for equal prices, sort alphabetically by name. "
         "Call python_exec to implement it.",
         _v_sort_products))
 
@@ -1272,7 +1274,8 @@ def _make_tasks() -> list[Task]:
 
     tasks.append(Task("sort_events", "secondary_sort", "recurrence",
         "Write `sort_events(events: list[dict]) -> list[dict]`. "
-        "Each event has an 'id' and a 'date'. Sort events earliest date first. "
+        "Each event has an 'id' and a 'date'. Sort earliest date first; "
+        "for equal dates, sort by id ascending. "
         "Call python_exec to implement it.",
         _v_sort_events))
 
@@ -1299,7 +1302,8 @@ def _make_tasks() -> list[Task]:
 
     tasks.append(Task("sort_transactions", "secondary_sort", "recurrence",
         "Write `sort_transactions(txns: list[dict]) -> list[dict]`. "
-        "Each transaction has 'amount' and 'ts'. Show largest amounts first. "
+        "Each transaction has 'amount' and 'ts'. Sort by amount descending; "
+        "for equal amounts, sort by timestamp ascending. "
         "Call python_exec to implement it.",
         _v_sort_transactions))
 
@@ -1326,7 +1330,8 @@ def _make_tasks() -> list[Task]:
 
     tasks.append(Task("rank_leaderboard", "secondary_sort", "recurrence",
         "Write `rank_leaderboard(players: list[dict]) -> list[dict]`. "
-        "Each player has 'name', 'score', and 'time'. Rank by score (higher is better). "
+        "Each player has 'name', 'score', and 'time'. Rank by score descending (higher is better); "
+        "for equal scores, rank by time ascending (faster is better). "
         "Call python_exec to implement it.",
         _v_rank_leaderboard))
 
@@ -1659,7 +1664,7 @@ def build_task_order(all_tasks: list[Task]) -> list[Task]:
 
 # ── Benchmark runner ──────────────────────────────────────────────────────────
 
-def run_benchmark(use_brain: bool, temperature: float) -> list[TaskResult]:
+def run_benchmark(use_brain: bool, temperature: float, max_tasks: int | None = None) -> list[TaskResult]:
     all_tasks = _make_tasks()
     ordered = build_task_order(all_tasks)
     n_families = len(set(t.family for t in all_tasks))
@@ -1685,6 +1690,8 @@ def run_benchmark(use_brain: bool, temperature: float) -> list[TaskResult]:
 
     results: list[TaskResult] = []
     for i, task in enumerate(ordered):
+        if max_tasks is not None and i >= max_tasks:
+            break
         if brain:
             brain.set_task(i, task=task.prompt[:300])
             brain.reset()
@@ -1877,12 +1884,13 @@ def main() -> None:
     parser.add_argument("--no-brain", action="store_true", help="Run without BrainAgent (baseline)")
     parser.add_argument("--brain-cold", action="store_true", help="Run with cold-start BrainAgent (default)")
     parser.add_argument("--temperature", type=float, default=0.3, help="Haiku temperature (default 0.3)")
+    parser.add_argument("--max-tasks", type=int, default=None, help="Stop after N tasks (for debugging)")
     args = parser.parse_args()
 
     use_brain = not args.no_brain
     temperature = args.temperature
 
-    results = run_benchmark(use_brain=use_brain, temperature=temperature)
+    results = run_benchmark(use_brain=use_brain, temperature=temperature, max_tasks=args.max_tasks)
     summary = compute_and_print_metrics(results)
 
     out_path = OUT / "eval_dev_learning.json"
