@@ -229,12 +229,21 @@ def tool_agent(tools: list | None = None, max_turns: int = 4,
                     if monitor:
                         monitor.push(block.text)
                 elif block.type == "tool_use":
-                    result = dispatch(block.name, block.input)
+                    # Pre-execution hook: brain checks reasoning trajectory and
+                    # proposed code BEFORE the tool runs. If it returns a string,
+                    # that string replaces execution — the tool is not called and
+                    # the agent sees the warning as the result.
+                    pre_result = None
+                    if monitor and hasattr(monitor, "before_tool_call"):
+                        pre_result = monitor.before_tool_call(block.name, block.input)
 
-                    # Brain intercept: pass raw input dict (no regex) to the
-                    # monitor's on_tool_call hook. The brain runs probe tests
-                    # and kNN in one call and returns a modified result if it
-                    # wants to intervene, or None to leave result unchanged.
+                    if pre_result is not None:
+                        result = pre_result   # brain blocked execution
+                    else:
+                        result = dispatch(block.name, block.input)
+
+                    # Post-execution hook: brain sees code + result, can inject
+                    # a reactive warning (e.g. execution error matches stored failure).
                     if monitor and hasattr(monitor, "on_tool_call"):
                         _modified = monitor.on_tool_call(block.name, block.input, result)
                         if _modified is not None:
