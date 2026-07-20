@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trace-use"
-version = "0.1.3"
+version = "0.1.4"
 description = "Learn failure patterns from LLM agent traces and intercept recurrences before they execute."
 readme = "README.md"
 requires-python = ">=3.10"

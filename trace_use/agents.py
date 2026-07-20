@@ -76,16 +76,18 @@ def _openai_call(model: str, prompt: str, max_tokens: int = 512):
     global _openai_chat_client
     if _openai_chat_client is None:
         from openai import OpenAI
-        _openai_chat_client = OpenAI()
+        _openai_chat_client = OpenAI(timeout=60.0)
     last = None
     for attempt in range(5):
         try:
-            r = _openai_chat_client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=0,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            _new_api = model.startswith("gpt-5") or model.startswith("o")
+            _kw: dict = {"messages": [{"role": "user", "content": prompt}]}
+            if _new_api:
+                _kw["max_completion_tokens"] = max_tokens
+            else:
+                _kw["max_tokens"] = max_tokens
+                _kw["temperature"] = 0
+            r = _openai_chat_client.chat.completions.create(model=model, **_kw)
             text   = r.choices[0].message.content or ""
             tokens = r.usage.prompt_tokens + r.usage.completion_tokens
             return text, tokens
@@ -93,7 +95,8 @@ def _openai_call(model: str, prompt: str, max_tokens: int = 512):
             last = e
             code = getattr(getattr(e, 'response', None), 'status_code', None) or \
                    getattr(e, 'status_code', None)
-            if code is not None and (code == 429 or code >= 500):
+            _is_to = "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower()
+            if _is_to or (code is not None and (code == 429 or code >= 500)):
                 wait = min(4 ** attempt, 60)
                 time.sleep(wait)
             else:
@@ -465,6 +468,149 @@ def _build_openai():
         v = np.asarray(out, dtype="float32")
         return v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
     return embed
+
+
+_CODING_SYSTEM_PROMPT = (
+    "You are a coding assistant with write_file and python_exec tools. "
+    "Write code, run it, verify it works, and fix any errors you find. "
+    "Make reasonable assumptions without asking for clarification."
+)
+
+
+def openai_tool_agent(tools: list | None = None, max_turns: int = 4,
+                      model: str = "gpt-4o-mini", max_tokens: int = 4096,
+                      system_prompt: str = _CODING_SYSTEM_PROMPT):
+    """ReAct tool-calling agent using OpenAI function-calling API.
+
+    Drop-in replacement for tool_agent() when provider="openai".
+    Returns a callable (prompt -> (trace, tokens)).
+    """
+    from .tools import TOOL_DEFINITIONS, dispatch
+
+    selected   = tools or ["calculator", "python_exec", "wikipedia_search"]
+    anthropic_defs = [t for t in TOOL_DEFINITIONS if t["name"] in selected]
+
+    # Convert Anthropic input_schema format → OpenAI function format
+    openai_defs = [
+        {
+            "type": "function",
+            "function": {
+                "name":        t["name"],
+                "description": t.get("description", ""),
+                "parameters":  t.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        }
+        for t in anthropic_defs
+    ]
+
+    def agent(prompt: str):
+        global _openai_chat_client
+        if _openai_chat_client is None:
+            from openai import OpenAI
+            _openai_chat_client = OpenAI(timeout=60.0)
+
+        _new_api = model.startswith("gpt-5") or model.startswith("o")
+        messages: list[dict] = []
+        if system_prompt:
+            # Prepend instructions into the user message — works regardless of
+            # which system/developer role the model version supports
+            full_prompt = f"{system_prompt}\n\nTASK:\n{prompt}"
+        else:
+            full_prompt = prompt
+        messages.append({"role": "user", "content": full_prompt})
+        trace_parts: list[str] = []
+        total_tokens = 0
+        monitor      = getattr(agent, "monitor", None)
+
+        for turn in range(max_turns):
+            # gpt-5 and o-series models don't support temperature or max_tokens
+            _extra: dict = {}
+            if _new_api:
+                _extra["max_completion_tokens"] = max_tokens
+            else:
+                _extra["max_tokens"] = max_tokens
+                _extra["temperature"] = 0
+
+            # Retry on 429 rate-limit and 5xx server errors
+            _last_err = None
+            for _attempt in range(5):
+                try:
+                    r = _openai_chat_client.chat.completions.create(
+                        model=model,
+                        tools=openai_defs if openai_defs else [],
+                        messages=messages,
+                        **_extra,
+                    )
+                    _last_err = None
+                    break
+                except Exception as _e:
+                    _last_err = _e
+                    _code = getattr(getattr(_e, "response", None), "status_code", None) \
+                            or getattr(_e, "status_code", None)
+                    _is_timeout = "timeout" in type(_e).__name__.lower() or "timeout" in str(_e).lower()
+                    if _is_timeout or _code == 429 or (_code is not None and _code >= 500):
+                        _wait = min(4 ** _attempt, 60)
+                        print(f"[{'timeout' if _is_timeout else 'rate limit'}] waiting {_wait}s before retry {_attempt+1}/5…")
+                        time.sleep(_wait)
+                    else:
+                        break
+            if _last_err is not None:
+                raise _last_err
+            msg = r.choices[0].message
+            total_tokens += r.usage.prompt_tokens + r.usage.completion_tokens
+
+
+            # Text content
+            if msg.content:
+                trace_parts.append(msg.content)
+                if monitor:
+                    monitor.push(msg.content)
+
+            # Tool calls
+            if not msg.tool_calls:
+                break
+
+            tool_results = []
+            for tc in msg.tool_calls:
+                import json as _json
+                try:
+                    tool_input = _json.loads(tc.function.arguments)
+                except Exception:
+                    tool_input = {}
+
+                pre_result = None
+                if monitor and hasattr(monitor, "before_tool_call"):
+                    pre_result = monitor.before_tool_call(tc.function.name, tool_input)
+
+                result = pre_result if pre_result is not None else dispatch(tc.function.name, tool_input)
+
+                if monitor and hasattr(monitor, "on_tool_call"):
+                    _mod = monitor.on_tool_call(tc.function.name, tool_input, result)
+                    if _mod is not None:
+                        result = _mod
+
+                chunk = f"[tool:{tc.function.name}({_json.dumps(tool_input)})] → {result[:500]}"
+                trace_parts.append(chunk)
+                if monitor:
+                    monitor.push(chunk)
+
+                tool_results.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.id,
+                    "content":      result[:4000],
+                })
+
+            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": msg.tool_calls})
+            messages.extend(tool_results)
+
+            if monitor and getattr(monitor, "should_bail", False):
+                trace_parts.append("[EARLY_EXIT: monitor bail]")
+                break
+
+        return "\n".join(trace_parts), total_tokens
+
+    agent.monitor = None
+    return agent
 
 
 def build_embedder():

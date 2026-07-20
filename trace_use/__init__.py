@@ -30,6 +30,7 @@ from .agents import (
     haiku,
     opus,
     tool_agent,
+    openai_tool_agent,
     build_embedder,
 )
 
@@ -62,6 +63,7 @@ __all__ = [
     "haiku",
     "opus",
     "tool_agent",
+    "openai_tool_agent",
     "build_embedder",
     # Forecaster pipeline
     "run_task",
