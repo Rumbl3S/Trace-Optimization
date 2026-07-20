@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
 import sys
 import time
 
@@ -43,17 +44,41 @@ console = Console()
 
 # ── Lazy imports (avoid slow sentence-transformers on --help) ─────────────────
 
+def _detect_provider() -> tuple[str, str, str]:
+    """Returns (provider, agent_model, judge_model)."""
+    has_openai    = bool(os.environ.get("OPENAI_API_KEY"))
+    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if has_openai:
+        return "openai", "gpt-4o-mini", "gpt-4o"
+    if has_anthropic:
+        return "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"
+    return "anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"
+
+
 def _load_stack(store_path: str):
     from trace_use import build_embedder, PersistentMotifStore, TrajectoryDetector, BrainAgent
-    from trace_use.config import DetectorConfig
+    from trace_use.config import BrainConfig, DetectorConfig
+
+    provider, agent_model, judge_model = _detect_provider()
     embedder = build_embedder()
     store    = PersistentMotifStore(embedder, path=store_path)
     detector = TrajectoryDetector(
         store, embedder,
-        config=DetectorConfig(storage_path=store_path),
+        config=DetectorConfig(
+            provider     = provider,
+            model        = judge_model,
+            storage_path = store_path,
+        ),
     )
-    brain    = BrainAgent(embedder, motif_store=store)
-    return embedder, store, detector, brain
+    brain = BrainAgent(
+        embedder, motif_store=store,
+        config=BrainConfig(
+            provider      = provider,
+            judge_model   = judge_model,
+            extract_model = judge_model,
+        ),
+    )
+    return embedder, store, detector, brain, provider, agent_model
 
 
 # ── UI helpers ────────────────────────────────────────────────────────────────
@@ -277,20 +302,67 @@ def _inspect_loop(store, detector, brain) -> None:
         console.print(_header(store))
 
 
-def _run_loop(store, detector, brain) -> None:
-    """Run mode: actually execute tasks with the agent."""
-    try:
-        from trace_use import tool_agent
-    except ImportError:
-        console.print("[red]trace_use not importable — install it first.[/]")
-        return
+def _auto_judge(task: str, trace: str, provider: str, judge_model: str) -> tuple[bool, str]:
+    """Ask the judge model whether the agent completed the task correctly.
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        console.print("[red]ANTHROPIC_API_KEY not set — cannot run agent.[/]")
+    Returns (passed, reason). `reason` is non-empty only on failure.
+    """
+    from trace_use.agents import _llm_call
+    # Give the judge the start (tool calls + outputs) and end (agent summary)
+    if len(trace) > 3000:
+        trace_for_judge = trace[:2000] + "\n...[middle omitted]...\n" + trace[-1000:]
+    else:
+        trace_for_judge = trace
+
+    prompt = f"""You are evaluating whether an AI agent completed a programming task correctly.
+
+TASK:
+{task}
+
+AGENT TRACE (tool calls, outputs, and final summary):
+{trace_for_judge}
+
+Answer with a JSON object:
+{{
+  "passed": true or false,
+  "reason": "if failed: name the specific logical mistake. Empty string if passed."
+}}
+
+Look for [tool:python_exec(...)] and [tool:write_file(...)] lines — those confirm code ran.
+If you see successful tool output (no unhandled errors at the end), it passed.
+Reply with ONLY the JSON, no other text."""
+
+    try:
+        text, _ = _llm_call(provider, judge_model, prompt, max_tokens=120)
+        import json, re
+        m = re.search(r'\{.*\}', text, re.DOTALL)
+        if m:
+            obj = json.loads(m.group())
+            return bool(obj.get("passed")), str(obj.get("reason", ""))
+    except Exception:
+        pass
+    return True, ""   # safe default: don't store a false failure
+
+
+def _run_loop(store, detector, brain, provider: str, agent_model: str) -> None:
+    """Run mode: actually execute tasks with the agent."""
+    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+        console.print("[red]No API key set. Export OPENAI_API_KEY or ANTHROPIC_API_KEY.[/]")
         sys.exit(1)
 
-    agent         = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
+    from trace_use.tools import get_workspace
+    workspace = get_workspace()
+
+    if provider == "openai":
+        from trace_use.agents import openai_tool_agent
+        agent = openai_tool_agent(["python_exec", "write_file"], max_turns=8, model=agent_model)
+    else:
+        from trace_use import tool_agent
+        agent = tool_agent(["python_exec", "write_file"], max_turns=8, model=agent_model)
+
     agent.monitor = brain
+    console.print(f"[dim]provider={provider} | model={agent_model}[/]")
+    console.print(f"[dim]workspace={workspace}[/]")
 
     console.print()
     console.print("[dim]Run mode: tasks are actually executed with the agent.[/]")
@@ -338,11 +410,16 @@ def _run_loop(store, detector, brain) -> None:
         elapsed = time.time() - t0
 
         console.print(Panel(
-            trace[-2000:] if len(trace) > 2000 else trace,
+            trace[-3000:] if len(trace) > 3000 else trace,
             title=f"[dim]Agent output  ({tokens} tokens, {elapsed:.1f}s)[/]",
             border_style="dim",
             box=box.SIMPLE,
         ))
+
+        # Show files written to workspace this turn
+        written = [str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file()]
+        if written:
+            console.print(f"[dim]Files in workspace: {', '.join(written)}[/]")
 
         if brain.last_fire:
             f = brain.last_fire
@@ -356,17 +433,53 @@ def _run_loop(store, detector, brain) -> None:
                 box=box.ROUNDED,
             ))
 
-        # ── Teach ─────────────────────────────────────────────────────────────
-        outcome = Prompt.ask(
-            "  Did it pass? [p=passed / f=failed / s=skip]",
-            choices=["p", "f", "s"],
-            default="s",
-        ).strip()
+        # ── Auto-judge ────────────────────────────────────────────────────────
+        _code_ran = "[tool:python_exec" in trace or "[tool:write_file" in trace
+        if not _code_ran:
+            passed, reason = False, "agent did not write or execute any code"
+        else:
+            with Live("[dim]Judging outcome…[/]", console=console,
+                      refresh_per_second=8, transient=True):
+                judge_model = "gpt-4o" if provider == "openai" else agent_model
+                passed, reason = _auto_judge(task, trace, provider, judge_model)
 
-        if outcome == "f":
-            _teach_failure(brain, store)
-        elif outcome == "p":
-            console.print("[green]✓ Marked as passed.[/]")
+        # Find intermediate tool errors in the trace even if the task ultimately passed
+        import re as _re
+        _error_lines = _re.findall(
+            r'\[tool:[^\]]+\] → [^\[]*?(?:Traceback \(most recent|[A-Z][a-zA-Z]+Error:|stderr:)[^\[]*',
+            trace,
+        )
+        _had_errors = bool(_error_lines)
+
+        if passed and not _had_errors:
+            console.print("[green]✓ PASSED[/] — no errors, nothing to learn.")
+            brain.store(trace, label=1)
+        elif passed and _had_errors:
+            # Agent recovered, but the intermediate mistakes are worth learning from
+            error_summary = _error_lines[0][:120].strip()
+            console.print(f"[green]✓ PASSED[/] [yellow](recovered from {len(_error_lines)} error(s))[/]")
+            console.print(f"[dim]  first error: {error_summary}[/]")
+            brain.set_task(task_idx, task=task)
+            n_before = store.count
+            with Live("[dim]Extracting motif from intermediate errors…[/]", console=console,
+                      refresh_per_second=8, transient=True):
+                brain.store(trace, label=0,
+                            metadata=f"Agent recovered but hit: {error_summary}")
+            n_after = store.count
+            if n_after > n_before:
+                console.print(f"[cyan]→ Motif learned:[/] {store.motifs[-1].name}")
+        else:
+            console.print(f"[red]✗ FAILED[/] — {reason}")
+            brain.set_task(task_idx, task=task)
+            n_before = store.count
+            with Live("[dim]Extracting motif…[/]", console=console,
+                      refresh_per_second=8, transient=True):
+                brain.store(trace, label=0, metadata=reason)
+            n_after = store.count
+            if n_after > n_before:
+                console.print(f"[cyan]→ Motif learned:[/] {store.motifs[-1].name}")
+            else:
+                console.print("[dim]→ No motif extracted (no code in trace or extraction filtered).[/]")
 
         task_idx += 1
         console.print(_header(store))
@@ -386,7 +499,7 @@ def main() -> None:
     store_path = args.store or _DEFAULT_STORAGE_PATH
 
     console.print("[dim]Loading embedder…[/]")
-    embedder, store, detector, brain = _load_stack(store_path)
+    embedder, store, detector, brain, provider, agent_model = _load_stack(store_path)
     console.print(_header(store))
 
     if args.clear:
@@ -400,7 +513,7 @@ def main() -> None:
         return
 
     if args.run:
-        _run_loop(store, detector, brain)
+        _run_loop(store, detector, brain, provider, agent_model)
     else:
         _inspect_loop(store, detector, brain)
 

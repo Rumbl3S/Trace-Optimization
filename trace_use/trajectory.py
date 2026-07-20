@@ -29,30 +29,27 @@ A past failure revealed this logical pattern:
 
   Pattern name:  {motif_name}
   Logical issue: {motif_description}
-  Applies when task explicitly mentions: "{required_condition}"
+  Key phrase to look for: "{required_condition}"
   Recommendation: {recommendation}
 
 New developer task:
   "{task}"
 
-Question: Does this task's description explicitly mention the same logical requirement
-that caused the past failure?
+Question: Does this task require the same thing that caused the past failure?
 
 Steps:
-1. Search the task text for exact wording related to "{required_condition}".
-   Quote it word-for-word from the task text above.
-2. If you find concrete matching text → relevant=true, fill in evidence_quote and warning.
-3. If the task does not explicitly mention this requirement → relevant=false.
-
-Important: Do NOT answer relevant=true because the domain is similar or the task might
-implicitly need it. Only quote text that is explicitly present in the task description.
+1. Search the task text for "{required_condition}" or any equivalent phrasing of the same concept.
+   Copy-paste the matching phrase WORD-FOR-WORD from the task text above — do not paraphrase.
+   Example: if key phrase is "EXACTLY k obstacle" and task says "pass through EXACTLY k obstacle cells", quote "pass through EXACTLY k obstacle cells".
+2. If you find matching text → relevant=true.
+3. If the task clearly does NOT require this → relevant=false.
 
 Return JSON only (no markdown, no extra text):
 {{
   "relevant": <true|false>,
   "confidence": <0.0-1.0>,
-  "evidence_quote": "<exact phrase from the task description that matches, or empty string>",
-  "warning": "<one concrete sentence about what to watch out for in this specific task, or empty string>"
+  "evidence_quote": "<verbatim phrase copied from the task text above, or empty string>",
+  "warning": "<one concrete sentence about what specifically to watch out for in this task, or empty string>"
 }}
 """
 

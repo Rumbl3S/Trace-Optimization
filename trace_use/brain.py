@@ -46,7 +46,7 @@ import numpy as np
 # ── Prompt templates ──────────────────────────────────────────────────────────
 
 _EXTRACT_MOTIF_PROMPT = """\
-A Python implementation just failed. Extract a reusable logical failure concept.
+A Python implementation just failed. Extract a reusable failure pattern.
 
 TASK:
 {task}
@@ -72,28 +72,44 @@ STEP 1 — Is this the SAME logical mistake as an existing pattern above?
   If NO:  set "update_id" to null and fill all fields.
 
 The motif must answer three questions:
-  1. What must the task explicitly state for this mistake to matter?
-  2. What reasoning or code behavior shows the mistake?
-  3. What correction should be recommended?
+  1. When does this mistake occur? (what kind of task triggers it)
+  2. What specific code pattern causes it AND what was that code trying to accomplish?
+  3. What is the correction?
+
+For required_condition: write a SHORT KEY PHRASE that would appear LITERALLY in any task where this bug recurs.
+  It must be findable as verbatim text in the task description — not a description of intent, not a meta-sentence.
+  Good: "paths through EXACTLY k obstacle" — appears literally in path-counting tasks
+  Good: "OAuth" or "Google sign-in" — appears literally in auth tasks
+  Good: "sort by GPA then name" — appears literally in multi-key sort tasks
+  Bad:  "task requires implementing Google OAuth" — this is a description, not a task phrase
+  Bad:  "task involves dynamic programming with constraints" — meta-description, won't appear in task text
+
+For violation_condition: quote a SHORT LITERAL SNIPPET from the FAILED CODE above that shows the bug, then explain why it is wrong.
+  The snippet must be copy-pasteable from the code block above — not paraphrased, not described.
+  Format: "<literal snippet from code> — <why this is structurally wrong and what it should be instead>"
+  Good (DP):  "dp[r][c][obstacles] += dp[r-1][c][obstacles] — adds paths without consuming an obstacle slot; should index dp[r-1][c][obstacles-1] when grid[r][c]==1"
+  Good (sort): "students.sort(key=lambda s: s['gpa']) — single key drops tiebreaker; needs key=lambda s: (-s['gpa'], s['name'])"
+  Good (dep):  "from flask_oauthlib.client import OAuth — flask_oauthlib is not installed; use authlib or requests-oauthlib instead"
+  Bad:  "DP update logic is incorrect" or "code does not handle the constraint properly" or "missing state dimension"
 
 Output ONLY JSON (no markdown, no text after the closing brace):
 {{
   "update_id": null,
   "id": "short_snake_case_4_words_max",
   "name": "Human-readable name 5-8 words",
-  "description": "One sentence: the logical principle violated — no variable names, no task-specific details",
-  "required_condition": "What must the task explicitly state for this to apply? E.g. 'task requires secondary tiebreak when primary sort keys are equal'",
-  "violation_condition": "What reasoning or code behavior shows the bug? E.g. 'sort uses single key with no tuple for secondary criterion'",
-  "recommendation": "Generalizable one-line fix — no variable names from this specific task",
+  "description": "One sentence: the logical principle violated — no variable names, no task-specific constants",
+  "required_condition": "KEY PHRASE that appears literally in the task text when this bug applies. Quote the constraint or requirement type, not a meta-sentence. E.g. 'EXACTLY k obstacle' or 'OAuth' or 'sort by primary then secondary'",
+  "violation_condition": "LITERAL CODE SNIPPET from the failed code above + why it's wrong. Format: '<exact snippet> — <what it should be>'. E.g. 'from flask_oauthlib.client import OAuth — flask_oauthlib not installed; use authlib'",
+  "recommendation": "Concrete fix as a code pattern — show the corrected snippet or the import to use instead. E.g. 'change dp[r][c][obs] += dp[r-1][c][obs] to dp[r][c][obs] += dp[r-1][c][obs-1] when grid[r][c]==1' or 'replace flask_oauthlib with authlib: from authlib.integrations.flask_client import OAuth'",
   "examples": ["brief example task where this applies"],
   "confidence": 0.85
 }}
 
 RULES:
-- description must generalize: no variable names, field names, or task-specific constants
-- required_condition describes what the TASK must say
-- violation_condition describes what the CODE or REASONING must show
-- recommendation must apply across different domains
+- required_condition must name the FEATURE or INTENT (what was being built), not just "the task uses libraries"
+- violation_condition must name the CODE PATTERN + PURPOSE (import X while doing Y), not just "dependency missing"
+- description must generalize across domains: no variable names, field names, or task-specific constants
+- recommendation must apply to any similar future task
 - If you cannot identify a concrete logical principle, return {{}}
 """
 
@@ -124,13 +140,20 @@ STEPS:
    Bad: "The task involves extracting data from a dict"
    Good: "returns the item from response['data']"  ← actual words from the TASK text above
 
-2. Find a line in PROPOSED CODE that shows "{violation_condition}".
-   COPY-PASTE the exact code line — do NOT describe what the code does.
-   Bad: "The code assumes a specific key exists"
-   Good: "return data['next_cursor']"  ← actual line from the CODE above
+2. Find the SPECIFIC line in PROPOSED CODE that directly causes the bug described by "{violation_condition}".
+   This is the line that would FAIL at runtime — not a comment, not a print, not a description.
+   For dependency errors: find the import line (e.g. "from flask_oauthlib.client import OAuth").
+   For logic errors: find the line with the wrong operation (e.g. "return data['key']" instead of ".get()").
+   COPY-PASTE the exact line — do NOT describe what the code does.
+   Bad: "print('App created')"  ← this is not the failing line
+   Bad: "The code imports an uninstalled library"  ← this is a description, not a quote
+   Good: "from flask_oauthlib.client import OAuth"  ← the actual import that would fail
 
 3. If both verbatim quotes found → applies=true, fill them in.
 4. If either is missing → applies=false, leave quotes empty.
+5. Write a concrete fix for the SPECIFIC CODE above: show the corrected line or the replacement snippet.
+   Bad: "Use 3D DP instead of 2D"
+   Good: "Change `dp[r][c][obs] += dp[r-1][c][obs]` to `dp[r][c][obs] += dp[r-1][c][obs-1]` when `grid[r][c] == 1`, else `dp[r][c][obs] += dp[r-1][c][obs]`"
 
 Do NOT answer yes because the task domain or vocabulary is similar.
 Answer yes ONLY when both quotes are copy-pasted verbatim from the actual text above.
@@ -142,7 +165,7 @@ Return JSON only (no markdown, no extra text after the closing brace):
   "requirement_quote": "<verbatim copy-paste from TASK or REASONING, or empty string>",
   "violation_quote": "<verbatim copy-paste of exact CODE line showing the bug, or empty string>",
   "explanation": "<one sentence why this matches>",
-  "recommendation": "<concrete one-line fix, or empty string>"
+  "recommendation": "<corrected code snippet showing exactly what to change in the code above>"
 }}
 """
 
@@ -200,12 +223,24 @@ def _validate_judge_result(
     if any(phrase in evidence_text for phrase in _VAGUE_JUDGE_PHRASES):
         return False
 
-    def _word_overlap(quote: str, target: str) -> float:
-        q_words = set(re.findall(r"\w+", quote.lower())) - _STOPWORDS
+    # Single-letter variable names are meaningless for overlap — strip them
+    _CODE_NOISE = frozenset("abcdefghijklmnopqrstuvwxyz") | {"dp", "arr", "res", "ans", "tmp"}
+
+    def _word_overlap(quote: str, target: str, threshold: float = 0.70) -> float:
+        q_words = set(re.findall(r"\w+", quote.lower())) - _STOPWORDS - _CODE_NOISE
         if not q_words:
-            return 0.0
+            # quote is all noise tokens — fall back to structural similarity
+            # (does target contain similar bracket/operator patterns?)
+            ops = set(re.findall(r"[\[\]+=\-<>!]+", quote))
+            t_ops = set(re.findall(r"[\[\]+=\-<>!]+", target))
+            return 1.0 if ops and ops <= t_ops else 0.0
         t_words = set(re.findall(r"\w+", target.lower()))
         return len(q_words & t_words) / len(q_words)
+
+    # Code violation quotes use variable names that change across implementations —
+    # use a lower threshold (40%) so the structural pattern still matches
+    def _is_code_like(s: str) -> bool:
+        return bool(re.search(r"[\[\]()]=?|\+=|-=|==|!=|>=|<=", s))
 
     task_r      = task.lower()
     code_r      = code.lower()
@@ -216,10 +251,11 @@ def _validate_judge_result(
         or req_quote.lower() in reasoning_r
         or _word_overlap(req_quote, task_r + " " + reasoning_r) >= 0.70
     )
+    viol_threshold = 0.40 if _is_code_like(viol_quote) else 0.70
     viol_in_context = (
         viol_quote.lower() in code_r
         or viol_quote.lower() in reasoning_r
-        or _word_overlap(viol_quote, code_r + " " + reasoning_r) >= 0.70
+        or _word_overlap(viol_quote, code_r + " " + reasoning_r) >= viol_threshold
     )
 
     return req_in_context and viol_in_context
@@ -228,19 +264,35 @@ def _validate_judge_result(
 # ── Helper: extract last python_exec code from a trace ───────────────────────
 
 def _extract_code_from_trace(trace: str) -> str:
-    """Extract the last python_exec code block from an agent trace."""
+    """Extract the most relevant implementation code from an agent trace.
+
+    Prefers write_file .py content (the actual implementation) over python_exec
+    code (which is often just a test harness importing the implementation).
+    """
     import json as _json
-    last_code = ""
-    idx = 0
-    while True:
-        start = trace.find("[tool:python_exec(", idx)
-        if start < 0:
+
+    last_write = ""
+    last_exec  = ""
+    idx        = 0
+
+    while idx < len(trace):
+        wp = trace.find("[tool:write_file(",  idx)
+        pp = trace.find("[tool:python_exec(", idx)
+        if wp < 0 and pp < 0:
             break
+        if wp >= 0 and (pp < 0 or wp < pp):
+            start    = wp
+            is_write = True
+        else:
+            start    = pp
+            is_write = False
+
         brace = trace.find("{", start)
         if brace < 0:
-            break
+            idx = start + 1
+            continue
         depth = 0
-        end = brace
+        end   = brace
         for i, ch in enumerate(trace[brace:]):
             if ch == "{":
                 depth += 1
@@ -251,13 +303,19 @@ def _extract_code_from_trace(trace: str) -> str:
                     break
         try:
             d = _json.loads(trace[brace:end])
-            code = d.get("code", "")
-            if code:
-                last_code = code
+            if is_write:
+                content = d.get("content", "")
+                if content and d.get("path", "").endswith(".py"):
+                    last_write = content
+            else:
+                code = d.get("code", "")
+                if code:
+                    last_exec = code
         except Exception:
             pass
         idx = end
-    return last_code
+
+    return last_write or last_exec
 
 
 def _parse_json_first(text: str) -> dict:
@@ -373,22 +431,25 @@ class MotifStore:
 
 # ── Fire message ──────────────────────────────────────────────────────────────
 
-def _make_fire_message(result: dict, motif_name: str = "") -> str:
+def _make_fire_message(result: dict, motif_name: str = "", motif_recommendation: str = "") -> str:
     req_quote      = result.get("requirement_quote", "")
     viol_quote     = result.get("violation_quote", "")
     explanation    = result.get("explanation", result.get("motif_match_explanation", ""))
-    recommendation = result.get("recommendation", "")
+    specific_fix   = result.get("recommendation", "")
     header = f"Learned pattern: {motif_name}" if motif_name else "Learned failure pattern"
     lines = [
         f"⚠️ BRAIN:\nSTOP: The monitor detected a likely logical failure before execution.\n",
         f"Evidence ({header}):",
         f"  - Requirement: {req_quote}",
-        f"  - Violation:   {viol_quote}",
+        f"  - Bug found:   {viol_quote}",
     ]
     if explanation:
-        lines.append(f"  - Explanation: {explanation}")
-    lines.append(f"\nRequired correction:\n  {recommendation}")
-    lines.append("\nRevise the code before calling the tool again.")
+        lines.append(f"  - Why:         {explanation}")
+    if specific_fix:
+        lines.append(f"\nFix for this specific code:\n  {specific_fix}")
+    if motif_recommendation and motif_recommendation != specific_fix:
+        lines.append(f"\nGeneral pattern fix:\n  {motif_recommendation}")
+    lines.append("\nRewrite the code to apply the fix above before calling the tool again.")
     return "\n".join(lines)
 
 
@@ -487,10 +548,17 @@ class BrainAgent:
         logical drift, missing assumptions, and plan-code contradictions.
         Trajectory contributes as evidence text, not as a numeric trigger.
         """
-        if name != self._cfg.exec_tool_name or self._interventions >= self._cfg.max_interventions:
+        if self._interventions >= self._cfg.max_interventions:
             return None
 
-        code = (input_dict or {}).get("code", "")
+        # Check write_file content (the implementation) AND python_exec code (the test)
+        if name == self._cfg.exec_tool_name:
+            code = (input_dict or {}).get("code", "")
+        elif name == "write_file":
+            code = (input_dict or {}).get("content", "")
+        else:
+            return None
+
         if not code.strip():
             return None
 
@@ -516,7 +584,7 @@ class BrainAgent:
                 self._cfg.judge_threshold,
             ):
                 self._record_fire(result, motif)
-                return _make_fire_message(result, motif.name)
+                return _make_fire_message(result, motif.name, motif.recommendation)
             elif result.get("applies"):
                 # Judge said yes but grounding check failed — worth logging
                 print(f"[BRAIN JUDGE REJECTED] motif={motif.id!r} "
@@ -704,7 +772,7 @@ class BrainAgent:
             "requirement_quote":  result.get("requirement_quote", ""),
             "violation_quote":    result.get("violation_quote", ""),
         }
-        self.last_warning = _make_fire_message(result, motif.name)
+        self.last_warning = _make_fire_message(result, motif.name, motif.recommendation)
         print(f"[BRAIN JUDGE ACCEPTED] motif={motif.id!r} conf={result.get('confidence',0):.2f} "
               f"req={result.get('requirement_quote','')[:60]!r} "
               f"viol={result.get('violation_quote','')[:60]!r}")
