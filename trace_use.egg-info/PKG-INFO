@@ -1,7 +1,7 @@
 Metadata-Version: 2.4
 Name: trace-use
-Version: 0.1.1
-Summary: Forecast agent failure from execution traces — spend retries and verification only where needed.
+Version: 0.1.3
+Summary: Learn failure patterns from LLM agent traces and intercept recurrences before they execute.
 License-Expression: MIT
 Keywords: llm,agents,reliability,failure-prediction,ai
 Classifier: Programming Language :: Python :: 3
@@ -28,687 +28,277 @@ Requires-Dist: twine; extra == "dev"
 [![PyPI](https://img.shields.io/pypi/v/trace-use)](https://pypi.org/project/trace-use/)
 [![Python](https://img.shields.io/pypi/pyversions/trace-use)](https://pypi.org/project/trace-use/)
 
-**Forecast agent failure from execution traces — spend retries and verification only where they're needed.**
+**A developer's failure memory — so you never make the same logical mistake twice.**
 
-`trace_use` is a self-contained Python toolkit that monitors LLM agents in real time, intercepts bugs mid-turn with deterministic probe tests, and learns from accumulated failures to predict where the next one will land.
+`trace_use` learns from LLM agent failures, extracts the logical principle behind each one, and warns the agent before the next occurrence — even if it happened a week ago on completely different code.
 
-It wraps around any tool-use agent — a single line of code — and provides two complementary layers:
+---
 
-| Layer | When it runs | What it does |
+## The story
+
+Agents fail in patterns, not randomly. The same logical mistake — catching all exceptions instead of selective ones, sorting on a single key when a tiebreak is required, returning `None` instead of raising on a missing required field — recurs across different tasks, different code, different sessions. Each recurrence burns tokens on a failure → diagnosis → retry loop that was avoidable.
+
+`trace_use` intercepts at two points:
+
+| Layer | When | What it does |
 |---|---|---|
-| **`brain.py` — Online Brain** | During execution, after every tool call | Runs deterministic probes on live code, injects targeted corrective feedback mid-turn |
-| **`pipeline.py` — Forecaster** | After task completion | Embeds traces, stores with pass/fail labels, predicts P(fail) via kNN for retry decisions |
+| **`TrajectoryDetector`** | Before the LLM writes any code | Compares the task description against past failures; injects targeted warnings into the prompt |
+| **`BrainAgent`** | Before each `python_exec` call | Checks proposed code against stored motifs; fires a STOP message if the exact logical gap is present |
 
 ---
 
-## The key insight: the trace carries the failure signal
+## How the learning works
 
-*How* an agent reasons predicts failure independently of whether the final answer looks wrong. Reasoning-only AUC on structured multi-hop tasks reaches **0.84** — wrong reasoning paths diverge from correct ones in embedding space well before the final answer token.
+When a task fails, a single background LLM call extracts *why* — not what the code looked like, but what logical requirement was violated. This produces a `FailureMotif`:
 
-This means failure can be detected mid-generation, not just retrospectively. The signal transfers to task types never seen before (leave-one-out AUC 0.61–0.73). One-liner responses have near-zero signal; multi-step reasoning — tool traces, chain-of-thought — is what makes it work.
-
-| Agent type | Signal quality | Why |
-|---|---|---|
-| Tool-use agent (`python_exec`, search) | High (AUC 0.87) | Tool call sequences differ structurally; correct traces show clean execution, failing traces show wrong output or repeated attempts |
-| Text agent with CoT | Moderate (AUC 0.68) | Wrong reasoning produces wrong intermediate values; a forced step-by-step output creates discriminating structure |
-| One-liner text agent | Near chance | `"Paris"` and `"Lyon"` produce near-identical embeddings |
-
-**Practical rule:** force multi-step output. A CoT wrapper adds signal to any text-only agent:
-
-```python
-def cot_agent(prompt: str):
-    return haiku(
-        prompt + "\n\nThink step by step, showing every intermediate result. "
-        "End with 'ANSWER: ...'."
-    )
 ```
+FailureMotif
+  id:                  "unconditional_retry_on_failure"
+  name:                "Retry Logic Does Not Differentiate Retryable Errors"
+  description:         "Retry logic does not distinguish between retryable
+                        and non-retryable exceptions."
+  required_condition:  "task requires selective retry based on error type or status code"
+  violation_condition: "except Exception catches all types without type check"
+  recommendation:      "check exception type or status code before deciding to retry"
+```
+
+The motif is abstract — no variable names, no task-specific constants. In a 56-task benchmark, one failure on `retry_request` produced this motif. It then fired correctly on `retry_on_type` and `safe_request` — tasks with completely different code and vocabulary — converting both from failures to passes.
+
+Motifs persist to `~/.trace_use/motifs.json` across sessions. A developer who hits a retry-logic bug on Monday will get a warning injected into their prompt on Friday, before writing a single line of code.
 
 ---
 
-## The Brain (`brain.py`)
+## Two-layer detection
 
-`BrainAgent` attaches to a tool-use agent via a single hook called after every tool execution. It provides five independent failure signals, applied in priority order:
+### Layer 1 — TrajectoryDetector (pre-prompt, before any code is written)
 
-### Signal 1 — Stall detector (fires immediately, no prior data needed)
+Before the LLM generates anything, the detector retrieves candidate motifs by embedding similarity and runs a cheap LLM judge call for each:
 
-Detects when the agent is spinning — making consecutive tool calls with no meaningful output. After 2 empty calls in a row, the brain injects a hard redirect:
+> "Does this task explicitly mention the logical requirement that caused the past failure? Quote the exact text."
 
-```
-STOP. Your last 2 'python_exec' calls produced no meaningful output. You are stuck.
-  1. Do not repeat the same call with the same or empty inputs.
-  2. Try a fundamentally different approach or break the problem down.
-  3. If writing code: produce one complete, self-contained implementation.
-Make your next call count.
-```
-
-This works from the very first task with zero stored history. No warming up required.
-
-**Real-world example:** In a live working session, the brain was monitoring Haiku on a nutrient tracker task. The agent made several consecutive empty `python_exec({})` calls — no code, no output, just the same empty invocation repeated. The stall detector fired after two unproductive turns and redirected it. Haiku responded with a single complete implementation covering 30+ foods, daily macro tracking, progress bars, and a weekly summary view — and passed the judge. Without the intervention, the agent would have continued spinning.
-
-### Signal 2 — Probe tests (deterministic, fires from task 1)
-
-For each task, you register a `probe_fn(ns: dict) -> list[str]`. After the agent's first `python_exec` call, the brain re-runs the code in an isolated namespace and calls the probe. If the probe returns failures, it immediately injects specific corrective feedback into the tool result before the next LLM turn:
+The judge must return a verbatim quote from the task text — no paraphrasing. If found, a `KNOWN PITFALLS` block is prepended:
 
 ```
-STOP — your code fails these tests RIGHT NOW:
-  ✗ rolling_vol([0.01, 0.01, ..., 0.01], window=10) = 0.0043
-    Expected ≈ 0 for a constant-return series.
-  FIX: Use returns.rolling(window).std() — not rolling().mean().std().
-       The latter computes vol-of-averages, not rolling volatility.
-Fix the specific issue above then call python_exec again immediately.
+⚠️  KNOWN PITFALLS — based on recorded failures:
+
+  [1] Retry Logic Does Not Differentiate Retryable Errors
+      Why this applies: "only retry on ConnectionError or Timeout"
+      Watch out for:    Code may catch all exceptions instead of just the listed types.
+      Recommendation:   check exception type or status code before deciding to retry
+
+Address these before writing your implementation.
 ```
 
-The agent reads this as the tool result and corrects the bug in the next turn. No re-prompting, no retry from scratch.
+### Layer 2 — BrainAgent (pre-execution, before each tool call)
 
-### Signal 3 — Logical failure patterns (LLM-extracted, fires after first failure)
-
-This is the key distinction from embedding similarity. When a task fails and gets stored, the brain makes a background haiku call to extract *why* it failed:
+Before each `python_exec` call, the brain checks the proposed code against stored motifs. The judge must return verbatim quotes from both the task description AND the proposed code. When both are found, a STOP message fires before the bad code runs:
 
 ```
-REASON: Agent wrote Flask routes but never created the HTML templates required by render_template.
-SIGNAL: Look for render_template calls in Flask code without corresponding template file creation.
+⚠️ BRAIN:
+STOP: The monitor detected a likely logical failure before execution.
+
+Evidence (Learned pattern: Retry Logic Does Not Differentiate Retryable Errors):
+  - Requirement: Only retry exceptions listed in retry_on.
+  - Violation:   except retry_on as e:
+  - Explanation: code retries unconditionally instead of checking type
+
+Required correction:
+  check exception type or status code before retrying
+
+Revise the code before calling the tool again.
 ```
 
-These extracted reasons — not the raw traces — are embedded and checked against future runs. When the current code matches the description of a past failure, the brain names the specific mistake:
-
-```
-Known failure pattern detected (similarity 71%):
-  WHAT WENT WRONG BEFORE: Agent wrote Flask routes but never created HTML templates.
-  WATCH FOR: render_template calls without corresponding template file creation.
-```
-
-This is logic detection, not keyword matching. Two traces can look semantically similar (both about web apps) but only one fires — the one that's missing the same step that caused a previous failure. Extraction runs in a background thread so it never blocks the session.
-
-### Signal 4 — kNN over stored code snippets (learned)
-
-A `FailureStore` keeps code-snippet embeddings with pass/fail labels. Every `python_exec` input is embedded and compared against stored snippets at query time. When P(fail) exceeds threshold, similar failed snippets surface as context — the agent can see which patterns caused failures before.
-
-### Signal 5 — Trajectory prefix kNN + Markov chain (learned, activates after 10 stored runs)
-
-A `TrajectoryStore` stores completed runs as ordered sequences of chunk embeddings:
-
-- **Prefix kNN:** The mean embedding of the live trajectory's prefix is compared to the same-length prefix of each stored run. kNN fraction of failing runs → P(fail).
-- **Markov state failure rate:** Once ≥ 30 chunks are stored, k-means discretizes all chunk embeddings into thought-state clusters. Each cluster tracks what fraction of runs visiting it eventually failed. Current chunk → nearest cluster → P(fail | state). Captures: *"models that reason this way tend to get the wrong answer."*
-
-The two learned signals combine: `p_fail = 0.55 × p_markov + 0.45 × p_prefix`. Suppressed until 10 runs are stored to prevent false positives on sparse data.
-
-### Wiring it up
-
-```python
-from trace_use import BrainAgent, build_embedder, tool_agent
-
-embedder = build_embedder()                          # local sentence-transformers, free
-brain    = BrainAgent(embedder, threshold=0.30, k=5)
-
-agent = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
-agent.monitor = brain                                # single line to attach the brain
-
-def probe_fn(ns: dict) -> list[str]:
-    """Return empty list if code is correct; return error strings to trigger intervention."""
-    fn = ns.get("compute_returns")
-    if not fn:
-        return ["compute_returns(prices_df) not defined"]
-    import numpy as np, pandas as pd
-    prices = pd.DataFrame({"A": [100.0, 110.0]})
-    r = fn(prices)
-    if r is None or abs(float(r.iloc[0, 0]) - np.log(1.1)) > 0.02:
-        return [
-            f"compute_returns gives {float(r.iloc[0,0]):.4f} for 100→110, "
-            f"expected log return {np.log(1.1):.4f}. "
-            "FIX: Use np.log(prices / prices.shift(1)).dropna() not arithmetic returns."
-        ]
-    return []
-
-for i, task in enumerate(tasks):
-    brain.set_task(i, probe_fn=probe_fn)   # register probe (or None for kNN-only)
-    brain.reset()
-    trace, tokens = agent(task["prompt"])
-
-    code   = extract_code(trace)       # from trace_use import extract_code
-    passed = run_checks(code)          # your own pass/fail function
-
-    # IMPORTANT: always store the FIRST-attempt trace with the FIRST-attempt label.
-    # Never store retry traces — they conflate recovery patterns with failure patterns.
-    brain.store(trace, int(passed))
-    if code:
-        brain.store_code(code, int(passed))
-```
-
-The brain fires at most **2 times per task** to avoid flooding the agent with warnings. The stall detector fires earliest (no data needed); probe tests fire on first-attempt bugs; logical failure patterns fire once at least one failure has been extracted; kNN fires later as the store fills.
-
-### `BrainAgent` public API
-
-| Method | Description |
-|---|---|
-| `brain.set_task(idx, probe_fn=fn, task="")` | Register the current task index, optional probe, and task description (used for failure extraction) |
-| `brain.reset()` | Clear buffer and intervention counter before a new task |
-| `brain.on_tool_call(name, input_dict, result)` | Hook called by `tool_agent` on every tool execution; returns modified result or `None` |
-| `brain.store(trace, label, metadata="")` | Store a completed run; when `label=0`, automatically extracts failure reason in the background |
-| `brain.store_code(code, label, metadata="")` | Store a code snippet with its label |
-| `brain.wrap(agent_fn, verifier=None)` | Wrap any callable agent — handles `set_task`, `reset`, `store`, and auto-labeling transparently |
-| `brain.n_stored` | Total completed runs in the trajectory store |
-| `brain._code_interventions` | How many times the brain fired on the current task |
-| `brain._logic_store.n_patterns` | Number of extracted logical failure patterns accumulated so far |
-
-### Storage invariant
-
-Always store the **first-attempt trace** with the **first-attempt label** — even when a retry fires and recovers a failed component. Storing retry traces conflates recovery patterns with failure patterns and degrades the kNN signal.
+Both layers share the same motif store. A motif learned mid-execution is immediately available for pre-prompt injection on the next task.
 
 ---
 
-## The Forecaster (`pipeline.py`)
+## False positive prevention
 
-`Forecaster` operates after task completion. It embeds full traces, stores them with labels, and predicts P(fail) for new traces via kNN. Integrates with `run_task` for end-to-end orchestration.
+Both layers use the same two-stage design: LLM judge for recall, deterministic gate for precision.
 
-### Quickstart
+The gate requires:
+- Confidence ≥ threshold (0.80 for execution-time, 0.70 for pre-prompt)
+- Both quotes non-empty and not vague (`"task implies"`, `"likely"`, `"might"`, etc.)
+- `requirement_quote` is a verbatim substring of the actual task text (or ≥70% word overlap)
+- `violation_quote` is a verbatim substring of the actual proposed code (or ≥70% word overlap)
 
-```python
-from trace_use import haiku, opus, build_embedder, run_task, self_judge, Forecaster
+**Cross-domain contamination is structurally impossible.** A retry motif requires quoting the phrase "retry" from the task text — that phrase will not appear in a sort task. No similarity threshold to tune; the predicate either holds or it does not.
 
-embedder   = build_embedder()
-forecaster = Forecaster(embedder)
-verifier   = self_judge(judge_agent=opus)   # use a different model — self-grading is overconfident
-
-result = run_task(
-    task       = "Explain the CAP theorem and name all three properties.",
-    agent      = haiku,
-    verifier   = verifier,
-    forecaster = forecaster,
-    retry      = True,
-)
-print(result.summary())
-```
-
-### With a tool-use agent
-
-```python
-from trace_use import tool_agent, build_embedder, run_task, code_judge, Forecaster
-
-agent = tool_agent(["python_exec"], max_turns=6)
-fc    = Forecaster(build_embedder())
-
-def check(namespace: dict, stdout: str) -> bool:
-    fn = namespace.get("binary_search")
-    return fn and fn([1,3,5,7,9], 5) == 2 and fn([1,3,5,7,9], 9) == 4
-
-result = run_task(
-    task       = "Fix the off-by-one in this binary search: ...",
-    agent      = agent,
-    verifier   = code_judge(check),
-    forecaster = fc,
-    retry      = True,
-)
-```
-
-### `Forecaster` API
-
-| Method / property | Description |
-|---|---|
-| `fc.fit(traces, labels)` | Bulk-load trace strings and int labels |
-| `fc.add(trace, label)` | Add one trace online after a task completes |
-| `fc.predict_fail(trace)` | `float` in `[0,1]` — P(this trace fails) |
-| `fc.should_intervene(trace)` | `bool` — uses adaptive threshold |
-| `fc.explain(trace, k=3)` | Nearest stored traces with similarity, label, and excerpt |
-| `fc.adaptive_threshold` | Auto-computed: `fail_rate + (1 − fail_rate) × 0.20` |
-
-Cold-start: predictions become reliable at approximately **50 traces** with a mix of passes and failures. Before that, `predict_fail` returns `0.0`.
+Result: **0% false positives on 16 near-miss tasks** across 8 failure families in the cold-start benchmark.
 
 ---
 
-## Results
-
-### Summary across all evaluations
-
-| Eval | Model | Tasks | Baseline | +Brain | Brain contribution |
-|---|---|---|---|---|---|
-| Multi-hop QA (FanOutQA + MuSiQue) | Haiku | component | — | AUC **0.85** | — |
-| Python debugging (`demo_debug.py`) | Haiku | 29 | — | AUC **0.87** | — |
-| Diverse everyday tasks (`demo_general.py`) | Haiku | 40 | — | AUC **0.68** | — |
-| 30 diverse domains (`eval_fires`) | Haiku | 30 | 27/30 (90%) | 28/30 (93%) | +1 task, 5 fires |
-| Hard code + text (`eval_hard`) | **Sonnet** | 14 | 12/14 (86%) | 13/14 (93%) | +1 task, 1 fire |
-| 30-task intensive (`eval_haiku_intensive`) | Haiku | 30 | 26/30 (87%) | 27/30 (90%) | +2 tasks, 2 fires |
-| Real-world hard tasks (`eval_real_world`) | Haiku | 30 | 28/30 (93%) | 29/30 (97%) | +1 task, 2 fires |
-| Extensive benchmark (`eval_extensive`) | Haiku | 32 | 28/32 (88%) | 28/32 (88%) | 0 tasks, 5 fires |
-| **Portfolio Risk Analyzer (`eval_project`)** | **Haiku** | **15** | **13/15 (87%)** | **14/15 (93%)** | **+1 task, 4 fires** |
-
----
-
-### Multi-hop QA — per-component forecasting
-
-Decomposing tasks into atomic sub-questions and forecasting each independently raised AUC from ~0.45 (chance, whole-task labels) to **0.85** on structured multi-hop QA (FanOutQA + MuSiQue).
-
-| Metric | Value |
-|---|---|
-| Per-component failure AUC | **0.85** |
-| Reasoning-only AUC (no answer text) | **0.84** |
-| Failures caught at 20% verify budget | **31%** (1.56× random baseline) |
-| Budget to catch 80% of failures | 58–68% of components |
-| Leave-one-task-type-out AUC | **0.61–0.73** (zero-shot transfer) |
-
----
-
-### Hard one-shot failures — Sonnet + Brain (`eval/eval_hard.py`)
-
-14 tasks where Sonnet reliably fails in one shot: 7 hard algorithm tasks (LRU cache, sliding window max, histogram largest rectangle, regex matching, thread-safe bank, burst balloons, Trie) and 7 physics/probability text problems (Bayesian base-rate neglect, rolling sphere inertia, twin paradox, hydrogen emission, buoyancy paradox, Simpson's paradox, Bertrand box).
-
-| | Baseline | +Brain |
-|---|---|---|
-| Code tasks (7) | 6/7 | **7/7** |
-| Text tasks (7) | 6/7 | 6/7 |
-| **Overall** | **12/14 (86%)** | **13/14 (93%)** |
-
-Brain fixed the histogram (largest rectangle) task — Sonnet's first implementation used a naive O(n²) approach that produced wrong results on edge cases. The probe caught it in one fire.
-
-![Hard tasks eval — Sonnet + Brain](eval/results/brain_hard.png)
-
----
-
-### Real-world hard tasks — 30 tasks (`eval/eval_real_world.py`)
-
-Tasks drawn from confirmed LLM failure modes in competitive programming and GPQA Diamond research: segment tree with lazy propagation, KMP with overlapping matches, LIS O(n log n), Bellman-Ford with negative cycle detection, Graham scan convex hull, matrix chain multiplication, sliding window median, Manacher's palindrome — and 15 graduate-level science and combinatorics problems (Nernst equation, Compton scattering, de Broglie wavelength, Henderson-Hasselbalch, Michaelis-Menten, CRT, Stirling numbers, derangements).
-
-| | Baseline | +Brain |
-|---|---|---|
-| Code (15 tasks) | 13/15 (87%) | **14/15 (93%)** |
-| Text (15 tasks) | 15/15 (100%) | 15/15 (100%) |
-| **Overall** | **28/30 (93%)** | **29/30 (97%)** |
-
-The brain fixed the Graham scan convex hull — haiku's first implementation failed the probe's edge-case tests (collinear point handling and interior point exclusion). The probe fired twice; haiku corrected both issues in subsequent turns.
-
-Haiku solved 15/15 GPQA-style text problems correctly on first attempt — Henderson-Hasselbalch, Bragg's law, Nernst equation, Compton scattering, CRT, derangements, Catalan and Stirling numbers all passed without brain intervention.
-
-![Real-world hard tasks — Haiku + Brain](eval/results/brain_real_world.png)
-
----
-
-### Extensive hard-task benchmark — 32 tasks (`eval/eval_extensive.py`)
-
-32 tasks drawn from competitive programming (LiveCodeBench Pro / ICPC-Eval difficulty) and GPQA-style science: lazy-propagation segment tree, bitmask TSP, matrix exponentiation, digit DP, Manacher's, minimum window substring, lexicographic topological sort, Kruskal's MST, plus Python debugging traps and 12 physics/math problems.
-
-| | Baseline | +Brain |
-|---|---|---|
-| Code (20 tasks) | 17/20 (85%) | 17/20 (85%) |
-| Text (12 tasks) | 11/12 (92%) | 11/12 (92%) |
-| **Overall** | **28/32 (88%)** | **28/32 (88%)** |
-
-Brain fired on 5 tasks (LCS substring, topological sort, segment tree, Kruskal's MST, late-binding closure); none were fixed. This is the clearest illustration of the brain's ceiling: when a task fails because the entire algorithm is wrong — not because of a specific edge-case bug — probe feedback can't recover it. The brain's value is highest when errors are localized (a formula sign, a boundary condition, a missed edge case), not when the approach itself needs rethinking.
-
-The 4 failures are all genuinely hard for Haiku: lazy-propagation segment tree, Kruskal's MST with Union-Find path compression, Python late-binding closure semantics, and the particle-in-a-box energy formula.
-
-![Extensive hard-task benchmark — Haiku + Brain](eval/results/brain_extensive.png)
-
----
-
-### Day-in-the-life project eval — Portfolio Risk Analyzer (`eval/eval_project.py`)
-
-The most realistic test: 15 sequential tasks that together build a complete stock portfolio risk analyzer from scratch, as a data analyst would in a single working session. Each task builds on the previous — bugs in early tasks propagate downstream.
-
-**Tasks (in order):**
-
-| # | Task | First attempt | +Brain |
-|---|---|---|---|
-| 1 | Simulate correlated stock prices (GBM + Cholesky) | ✓ | ✓ ⚡×1 |
-| 2 | Compute log daily returns | ✓ | ✓ |
-| 3 | Rolling 20-day statistics (mean, vol, skew) | **✗** | **✓ ⚡×1 ↑FIXED** |
-| 4 | Annualised covariance matrix | ✓ | ✓ |
-| 5 | Minimum variance portfolio (scipy.optimize) | ✓ | ✓ |
-| 6 | Maximum Sharpe ratio (tangency portfolio) | ✓ | ✓ |
-| 7 | 1-day 95% Value at Risk (historical) | ✓ | ✓ |
-| 8 | Conditional VaR / Expected Shortfall | ✓ | ✓ |
-| 9 | Maximum drawdown | ✓ | ✓ |
-| 10 | Annualised Sharpe ratio | ✓ | ✓ |
-| 11 | Portfolio beta to market | ✓ | ✓ |
-| 12 | Risk contribution (marginal to portfolio variance) | ✓ | ✓ |
-| 13 | Stress test: apply shock scenarios | ✓ | ✓ ⚡×2 |
-| 14 | Monthly rebalancing with transaction costs | **✗** | **✗** ⚡×2 |
-| 15 | Full portfolio risk report | ✓ | ✓ |
-
-**Overall: 13/15 (87%) baseline → 14/15 (93%) with brain**
-
-![Portfolio Risk Analyzer — Haiku + Brain, 15-task session](eval/results/brain_project.png)
-
-**What the brain caught (Task 3 — Rolling statistics):**
-
-Haiku's first implementation computed `returns.rolling(window).mean().std()` — the standard deviation of rolling averages — instead of `returns.rolling(window).std()`, the rolling standard deviation. These are not the same: the first smooths out variation before measuring it, systematically underestimating volatility.
-
-The probe detected this with a constant-return test series. A constant series (`[0.01, 0.01, ..., 0.01]`) has zero `rolling().std()`, but nonzero `rolling().mean().std()` — so a wrong implementation passes on typical data but fails here. The brain injected:
-
-```
-STOP — your code fails these tests RIGHT NOW:
-  ✗ rolling vol of constant-return series = 0.0043, expected ≈ 0.
-  FIX: Use returns.rolling(window).std()
-       NOT returns.rolling(window).mean().std()
-       The latter gives vol-of-averages, not rolling volatility.
-```
-
-Haiku corrected it in the next turn. **Without this catch at Task 3, the covariance matrix (Task 4), Sharpe ratio (Task 10), and the final risk report (Task 15) would all have been built on wrong volatility estimates.** Early interception prevents silent error propagation — the core benefit in a project context.
-
----
-
----
-
-## Use it in your own projects
-
-### Install
+## Quick start
 
 ```bash
 pip install trace-use
 ```
 
-Or install from source (for the latest or to run evals):
+Works with **Anthropic** or **OpenAI** — set whichever key you have:
 
 ```bash
-git clone https://github.com/Rumbl3S/Trace-Optimization.git
-cd Trace-Optimization
-pip install -e .
+export ANTHROPIC_API_KEY=sk-ant-...   # uses claude-haiku-4-5
+# or
+export OPENAI_API_KEY=sk-proj-...     # uses gpt-4o-mini (agent) + gpt-4o (judge)
 ```
 
-Set your API key — either export it or drop a `.env` file at your project root:
+`build_embedder()` prefers OpenAI embeddings when `OPENAI_API_KEY` is set (avoids loading a local model). Falls back to `sentence-transformers` (free, no key needed) otherwise.
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-...      # only needed if sentence-transformers is unavailable
-```
-
-Then import and go:
+### Minimal setup
 
 ```python
-from trace_use import BrainAgent, build_embedder, tool_agent
-from trace_use import Forecaster, run_task, self_judge, code_judge
-```
-
-Verify the offline test suite at any time (no API key needed):
-
-```bash
-pytest tests/ -q     # 153 tests, ~1s, fully stubbed
-```
-
----
-
-### Minimal setup — wrap any task loop in 5 minutes
-
-No probes, no custom verifiers — just the brain's kNN trajectory signal. The brain starts cold and fires warnings as failures accumulate:
-
-```python
-from trace_use import BrainAgent, build_embedder, tool_agent
-
-brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent         = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
-agent.monitor = brain                 # one line to attach
-
-for i, (prompt, check_fn) in enumerate(my_tasks):
-    brain.set_task(i)                 # no probe_fn = kNN-only mode
-    brain.reset()
-
-    trace, tokens = agent(prompt)
-    passed        = check_fn(trace)   # your existing evaluation logic
-
-    brain.store(trace, int(passed))   # brain learns from this outcome
-```
-
-The brain's kNN signal becomes meaningful around task 15–20 once it has seen a mix of passes and failures. Probe tests (below) work immediately from task 1.
-
----
-
-### Add probe tests for maximum benefit
-
-Probes are deterministic unit tests that run on the agent's code before the next LLM turn. They are the highest-value part of the brain and work from task 1 with no warm-up.
-
-A good probe:
-- Tests a specific edge case that the model commonly gets wrong
-- Returns an empty list if the code is correct (never fire on correct code)
-- Includes a `FIX:` clause in the failure message pointing to the exact algorithm error
-
-```python
-def probe_sharpe(ns: dict) -> list[str]:
-    """Catch the most common Sharpe ratio bug: missing sqrt(252) annualisation."""
-    fn = ns.get("sharpe_ratio") or ns.get("annualized_sharpe")
-    if not fn:
-        return ["sharpe_ratio(returns, rf=0.02) not defined"]
-
-    import numpy as np, pandas as pd
-    np.random.seed(0)
-    # Known distribution: daily mu=0.0005, vol=0.01 → annualised Sharpe ≈ 0.79
-    rets = pd.Series(np.random.normal(0.0005, 0.01, 252))
-    sr = fn(rets, rf=0.0)
-
-    if not isinstance(sr, (int, float)):
-        return ["sharpe_ratio must return a scalar float"]
-
-    if abs(sr) < 0.3:
-        return [
-            f"sharpe_ratio = {sr:.4f} — this looks like a daily (non-annualised) figure. "
-            "FIX: Multiply by sqrt(periods): "
-            "sr = (returns.mean() - rf/periods) / returns.std() * sqrt(periods) "
-            "For daily data, sqrt(252) ≈ 15.87."
-        ]
-    return []
-
-# register per task
-brain.set_task(task_idx, probe_fn=probe_sharpe)
-```
-
-**Probe design tips:**
-- Test the specific algorithm property most likely to be wrong, not the whole function
-- Use a synthetic input where the correct answer is analytically known
-- For numerical functions: compare to a closed-form value, not another implementation
-- Make the FIX: clause algorithmic, not vague — "use `np.log(p/p.shift(1))`" not "check your formula"
-
----
-
-### Track what the brain is doing
-
-```python
-# See how often the brain fires
-print(f"Brain interventions this task: {brain._code_interventions}")
-print(f"Total stored trajectories:     {brain.n_stored}")
-
-# After your loop, print a summary
-for r in results:
-    fires = r.get("fires", 0)
-    status = "FIXED" if r["brain_helped"] else ("FIRE" if fires else "")
-    print(f"[{'✓' if r['passed'] else '✗'}] {status:5} {r['name']}")
-```
-
-The visualization dashboard updates live during a run:
-
-```python
-from eval.viz_brain import BrainViz
-from pathlib import Path
-
-viz = BrainViz()
-
-# inside your task loop, after each task:
-viz.update(brain, results, fire_counts)
-viz.save(Path("my_session.png"))
-```
-
-This produces a 4-panel dark dashboard showing: the Markov thought-state graph (nodes sized by visit count, colored by failure rate), a PCA trajectory map of all stored runs, a per-task pass/fail timeline, and the brain fire rate.
-
----
-
-### Threshold tuning
-
-The default threshold is `0.30`. Lower it if you want earlier, more aggressive intervention; raise it if the brain fires too often on passing tasks.
-
-```python
-brain = BrainAgent(embedder, threshold=0.25)   # more aggressive
-brain = BrainAgent(embedder, threshold=0.40)   # more conservative
-```
-
-For a new use case, start at `0.30` and observe `brain._code_interventions` across 10–20 tasks. If the brain fires on tasks that pass without intervention, raise the threshold. If it never fires on tasks that fail, lower it.
-
----
-
-### Choosing what tasks to add probes for
-
-Not every task needs a probe. Use probes where:
-- There is a specific known failure mode (e.g., a particular edge case, formula direction, or off-by-one)
-- The failure is deterministically testable with a small synthetic input
-- Getting it wrong silently corrupts downstream tasks
-
-Skip probes for:
-- Tasks with ambiguous success criteria
-- Tasks where any reasonable implementation is acceptable
-- Text-generation tasks (probes only work on `python_exec`)
-
----
-
-### A realistic day-of-work pattern
-
-This mirrors how the portfolio analyzer eval was run. Each task is a sequential step in a larger project; the brain accumulates signal across all of them:
-
-```python
-from trace_use import BrainAgent, build_embedder, tool_agent, extract_code, code_judge
-from pathlib   import Path
-import json, time
-
-def my_probe(ns: dict) -> list[str]:
-    """Your deterministic edge-case test for the current task."""
-    fn = ns.get("my_function")
-    if not fn:
-        return ["my_function not defined"]
-    result = fn(known_input)
-    if result != expected_output:
-        return [f"Got {result}, expected {expected_output}. FIX: ..."]
-    return []
-
-def my_check(ns: dict, stdout: str) -> bool:
-    """Your full pass/fail verifier — same function you'd pass to code_judge."""
-    fn = ns.get("my_function")
-    return fn and fn(case1) == ans1 and fn(case2) == ans2
-
-TASKS = [
-    {"name": "Step 1", "prompt": "Write my_function that ...", "probe": my_probe},
-    {"name": "Step 2", "prompt": "Now extend it to handle ..."},
-    # tasks in dependency order — each builds on the previous
-]
-
-brain         = BrainAgent(build_embedder(), threshold=0.30, k=5)
-agent         = tool_agent(["python_exec"], max_turns=10, model="claude-haiku-4-5-20251001")
-agent.monitor = brain
-results       = []
-
-for i, task in enumerate(TASKS):
-    brain.set_task(i, probe_fn=task.get("probe"))
-    brain.reset()
-    t0 = time.time()
-
-    trace, tokens = agent(task["prompt"])
-    fires         = brain._code_interventions
-    code          = extract_code(trace)            # from trace_use import extract_code
-
-    # evaluate with code_judge or your own check function
-    verifier   = code_judge(my_check)
-    first_pass = verifier(task["prompt"], trace) >= 0.5
-
-    print(f"{i+1}/{len(TASKS)} {'✓' if first_pass else '✗'}  "
-          f"{task['name']}  {tokens:,} tok  {time.time()-t0:.0f}s"
-          + (f"  [⚡×{fires}]" if fires else ""))
-
-    # store first-attempt trace with first-attempt label
-    brain.store(trace, int(first_pass))
-    if code:
-        brain.store_code(code, int(first_pass))
-
-    results.append({"name": task["name"], "passed": first_pass, "fires": fires})
-
-json.dump(results, open("my_session.json", "w"), indent=2)
-```
-
----
-
-## Live dashboard (`eval/viz_brain.py`)
-
-`BrainViz` renders a 4-panel dark dashboard that updates after every task:
-
-| Panel | What it shows |
-|---|---|
-| **Neuron Graph** | k-means thought-state nodes sized by visit count, colored green→red by failure rate; transition edges weighted by frequency. Raw scatter shown before Markov activates (≥30 chunks). |
-| **Trajectory Map** | PCA-2D of all stored chunk embeddings. Each completed run is a polyline: green=pass, red=fail. Clusters of failure trajectories become visible as the store fills. |
-| **Score Timeline** | Per-task pass/fail bars with cumulative accuracy line. |
-| **Fire Report** | Brain fires per task + cumulative fire rate vs 30% dashed reference. |
-
----
-
-## Embedder
-
-`build_embedder()` in `agents.py` prefers local and falls back to remote:
-
-1. **`sentence-transformers` (preferred):** `all-MiniLM-L6-v2`, 384-dim, free, ~10ms/chunk on CPU, no API key required
-2. **OpenAI `text-embedding-3-small`:** 1536-dim, requires `OPENAI_API_KEY`
-
-Both return L2-normalised `float32` vectors and are drop-in interchangeable.
-
----
-
-## Verifiers (`pipeline.py`)
-
-The only task-specific input to the pipeline is a `Verifier`: `(question, answer) -> float` in `[0, 1]`.
-
-| Verifier | When to use |
-|---|---|
-| `code_judge(check_fn)` | Programmatic — exec the code and run your assertions |
-| `gold_judge(gold, agent)` | Ground-truth string available |
-| `self_judge(judge_agent)` | No ground truth — use a different model to grade |
-| `tiered_judge(fast, strong)` | Save cost — fast model on easy cases, strong on uncertain |
-| `self_consistency(resample, samples)` | No judge — re-run and check agreement |
-
-```python
-# code_judge: cleanest signal, use when possible
-def check(ns: dict, stdout: str) -> bool:
-    fn = ns.get("min_variance_portfolio")
-    if not fn: return False
-    import numpy as np
-    cov = np.diag([0.04, 0.16])
-    r = fn(cov)
-    w = np.array(r["weights"]).flatten()
-    return abs(sum(w) - 1.0) < 0.01 and w[0] > 0.5   # more weight on lower-var asset
-
-verifier = code_judge(check)
-```
-
----
-
-## `run_task` reference
-
-```python
-run_task(
-    task            = "...",       # task string
-    agent           = haiku,       # callable: prompt -> text or (text, tokens)
-    verifier        = verifier,    # callable: (q, trace) -> float
-    forecaster      = fc,          # Forecaster instance (optional)
-    retriever       = retriever,   # context retriever (optional)
-    threshold       = None,        # override adaptive threshold (optional)
-    cap             = 8,           # max sub-questions from decompose
-    display         = True,        # Rich live terminal output
-    retry           = True,        # fire self-critique retry on high P(fail)
-    retry_agent     = None,        # different agent for retries
-    decompose_agent = None,        # different agent for decomposition
+from trace_use import (
+    BrainAgent, PersistentMotifStore, TrajectoryDetector,
+    BrainConfig, build_embedder, tool_agent,
 )
+
+embedder = build_embedder()
+store    = PersistentMotifStore(embedder)           # loads ~/.trace_use/motifs.json
+detector = TrajectoryDetector(store, embedder)      # pre-task injection
+brain    = BrainAgent(embedder, motif_store=store)  # mid-execution interception
+
+agent         = tool_agent(["python_exec"], max_turns=8)
+agent.monitor = brain
+
+for i, task in enumerate(tasks):
+    brain.set_task(i, task=task["prompt"])
+    brain.reset()
+
+    # Layer 1: inject known pitfalls before the LLM starts
+    enriched_prompt, matches = detector.inject(task["prompt"])
+    if matches:
+        print(f"⚠️  {len(matches)} pitfall(s) injected")
+
+    # Layer 2: brain fires mid-execution via agent.monitor
+    trace, tokens = agent(enriched_prompt)
+    passed = run_checks(trace)
+
+    # Always store the first-attempt trace with the first-attempt label
+    brain.store(trace, int(passed), metadata=failure_reason_if_failed)
 ```
 
-Returns a `TaskResult` with `.n_pass`, `.n_fail`, `.n_intervened`, `.summary()`, and per-component `.components` (each with `.question`, `.trace`, `.p_fail`, `.label`, `.retried`, `.neighbor`).
+### Interactive terminal demo
+
+```bash
+python demo_session.py           # inspect mode: type tasks, see what warnings fire
+python demo_session.py --run     # run mode: actually executes tasks with the agent
+python demo_session.py --show    # list all stored motifs
+python demo_session.py --clear   # wipe motif store
+python demo_session.py --store ./my_project.json   # project-specific store
+```
 
 ---
 
-## Demos
+## API reference
 
-```bash
-# classic AUC demos
-python demo_general.py          # 40 diverse tasks, CoT haiku, AUC ~0.68
-python demo_debug.py            # 29 Python debugging tasks, tool agent, AUC ~0.87
-python demo_large.py            # 80+ mixed tasks, full Rich display
+### `TrajectoryDetector`
 
-# brain interception evals
-python eval/eval_fires.py       # 30 diverse domains, haiku, live brain dashboard
-python eval/eval_hard.py        # 14 hard one-shot failures, Sonnet
-python eval/eval_hard.py --haiku   # same tasks with Haiku
-python eval/eval_haiku_intensive.py   # 30 tasks, haiku, intensive
-python eval/eval_real_world.py  # 30 hard (segment tree, GPQA-style), haiku
-python eval/eval_extensive.py   # 32 tasks, LiveCodeBench Pro / ICPC-Eval difficulty
-python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
+| Method | Description |
+|---|---|
+| `detector.check(task)` | Returns `list[MotifMatch]` — relevant motifs with grounded evidence |
+| `detector.inject(task)` | Returns `(enriched_prompt, matches)` — prepends KNOWN PITFALLS block if matches exist |
+
+### `BrainAgent`
+
+| Method / property | Description |
+|---|---|
+| `brain.set_task(idx, task="")` | Register task index and description before each task |
+| `brain.reset()` | Clear reasoning buffer and counters before each task |
+| `brain.push(text)` | Accumulate reasoning chunk — called automatically via `agent.monitor` |
+| `brain.before_tool_call(name, input_dict)` | Pre-execution hook — returns STOP message or `None` |
+| `brain.on_tool_call(name, input_dict, result)` | Post-execution stall detection |
+| `brain.store(trace, label, metadata="")` | Store result; extracts motif on `label=0` (failure) |
+| `brain.n_stored` | Number of learned motifs |
+| `brain.last_fire` | Dict with motif id, confidence, and verbatim quotes from the most recent fire |
+
+### `PersistentMotifStore`
+
+```python
+store = PersistentMotifStore(embedder)                     # default: ~/.trace_use/motifs.json
+store = PersistentMotifStore(embedder, path="./proj.json") # project-specific
+store.clear()                                              # wipe all motifs
+store.count                                                # number of stored motifs
+store.motifs                                               # list[FailureMotif]
 ```
+
+### Configuration
+
+All tunable constants live in `BrainConfig` / `DetectorConfig`. The `provider` field selects the LLM backend:
+
+```python
+from trace_use import BrainConfig, DetectorConfig, BrainAgent, TrajectoryDetector
+
+# OpenAI backend — gpt-4o for judge (verbatim-quote compliance), gpt-4o-mini for agent
+brain_cfg = BrainConfig(
+    provider      = "openai",           # "anthropic" (default) or "openai"
+    judge_model   = "gpt-4o",           # stronger model for judge accuracy
+    extract_model = "gpt-4o",
+    judge_threshold  = 0.80,            # min confidence to fire
+    max_interventions = 2,              # max fires per task
+    exec_tool_name   = "python_exec",   # tool name to intercept
+)
+brain = BrainAgent(embedder, config=brain_cfg)
+
+# Anthropic backend
+brain_cfg = BrainConfig(
+    provider    = "anthropic",
+    judge_model = "claude-haiku-4-5-20251001",
+)
+
+det_cfg = DetectorConfig(
+    provider        = "openai",
+    model           = "gpt-4o",
+    judge_threshold = 0.70,
+    retrieval_top_k = 5,
+    storage_path    = "./project_motifs.json",
+)
+detector = TrajectoryDetector(store, embedder, config=det_cfg)
+```
+
+### Storage invariant
+
+Always store the **first-attempt trace** with the **first-attempt label** — even when a retry fires and recovers a failed task. Storing retry traces conflates recovery patterns with failure patterns.
+
+---
+
+## Results
+
+### Cold-start learning — 56 tasks, 8 failure families (`eval_dev_learning`)
+
+The core benchmark. 56 tasks across 8 programming families (nested key access, shared state, API key mapping, validation, off-by-one, unit scaling, secondary sort, retry classification). Each family has 1 discovery task (brain cold-starts with no motifs), 4 recurrence tasks (brain fires if a motif was learned), and 2 near-miss tasks (same domain, correct code — brain must stay silent).
+
+Run: `gpt-4o-mini` agent, `gpt-4o` judge, OpenAI embeddings.
+
+| Metric | Value |
+|---|---|
+| Overall pass rate | **82.1%** (46/56) |
+| Tasks saved by brain fires | **4** (retry_on_type, safe_request, merge_response_lists, rank_leaderboard) |
+| False positive rate on 16 near-miss tasks | **0%** |
+| Motif generalization | retry_request → retry_on_type + safe_request (different code, same logical error) |
+
+**What a fire looks like in practice:**
+
+```
+[BRAIN JUDGE RAW] motif='unconditional_retry_on_failure' applies=True conf=1.00
+  req='Only retry exceptions listed in retry_on.'
+  viol='except retry_on as e:'
+[BRAIN FIRE] motif: unconditional_retry_on_failure, conf: 1.00
+[16/56] retry_on_type   retry_classification   | PASS [FIRED] | 13.4s
+```
+
+The agent wrote `except retry_on as e:` — iterating the list as a catch-all instead of checking type membership. The brain caught this, injected a STOP, the agent corrected the code, and the task passed.
+
+**Where it didn't fire:**
+
+The api_key and nested_key families had recurring failures that the brain missed. Root cause: embedding similarity between abstract motif descriptions and concrete task prompts was below the retrieval threshold (~0.05–0.09 cosine similarity), so those motifs never reached the judge. This is an active limitation — the pre-filter is too coarse for short, concrete task descriptions.
+
+### Portfolio Risk Analyzer — 15 sequential tasks (`eval_project`)
+
+Task 3 (rolling statistics) failed: the agent computed `returns.rolling(window).mean().std()` instead of `returns.rolling(window).std()`. Wrong volatility at Task 3 would have propagated silently into covariance (Task 4), Sharpe ratio (Task 10), and the final risk report (Task 15). Brain caught it before execution.
+
+### Where brain fires don't help
+
+`eval_extensive` — 5 fires, 0 tasks fixed. When a task fails because the entire algorithm is wrong (bitmask TSP that needs DP from scratch), motif-based feedback cannot recover it. The brain's value is highest when the error is localized — a boundary condition, a missing type check, a swallowed exception — not when the approach itself needs replacing.
 
 ---
 
@@ -716,31 +306,34 @@ python eval/eval_project.py     # 15-task portfolio analyzer session, haiku
 
 | Path | Role |
 |---|---|
-| `trace_use/pipeline.py` | Public API: `run_task`, `decompose`, `attempt`, `Forecaster`, `make_retriever`, all verifiers |
-| `trace_use/brain.py` | `BrainAgent`, `TrajectoryStore`, `FailureStore`, `LogicalFailureStore` — inference-time failure interception |
-| `trace_use/forecast.py` | Primitives: `knn_predict`, `knn_predict_cross`, `auc`, `spearman` |
-| `trace_use/display.py` | Rich live terminal display used by `run_task` |
-| `trace_use/agents.py` | `haiku`, `opus`, `tool_agent`, `streaming_agent`, `build_embedder` (lazy clients, keys from env/`.env`) |
-| `demo_general.py` | 40 diverse tasks, CoT haiku, live plot, AUC ~0.68 |
-| `demo_debug.py` | 29 Python debugging tasks, tool agent, AUC ~0.87 |
-| `demo_large.py` | 80+ mixed tasks, full Rich display |
-| `bench/` | Vendored benchmark loaders (FanOutQA, MuSiQue) |
-| `eval/eval_fires.py` | 30-task brain eval, diverse domains |
-| `eval/eval_hard.py` | 14 hard one-shot failures, Sonnet + Haiku |
-| `eval/eval_haiku_intensive.py` | 30-task intensive haiku session |
-| `eval/eval_real_world.py` | 30 hard tasks: competitive programming + GPQA-style science |
-| `eval/eval_extensive.py` | 32 tasks: LiveCodeBench Pro / ICPC-Eval difficulty + GPQA-style |
-| `eval/eval_project.py` | 15-task portfolio risk analyzer — the day-in-the-life benchmark |
-| `eval/viz_brain.py` | 4-panel live brain dashboard |
-| `eval/results/` | All saved charts and JSON run logs |
-| `tests/` | Offline test suite: `test_forecast.py`, `test_pipeline.py` (~150 tests, ~2s, fully stubbed) |
+| `trace_use/brain.py` | `BrainAgent`, `MotifStore`, `FailureMotif` — mid-execution motif detection |
+| `trace_use/trajectory.py` | `TrajectoryDetector`, `MotifMatch` — pre-task pre-prompt injection |
+| `trace_use/motif_store.py` | `PersistentMotifStore` — JSON-backed cross-session persistence |
+| `trace_use/config.py` | `BrainConfig`, `DetectorConfig` — all tunable constants |
+| `trace_use/agents.py` | `tool_agent`, `haiku`, `opus`, `build_embedder`, `_llm_call` |
+| `demo_session.py` | Interactive TUI: inspect trajectory detection, teach the system |
+| `eval/eval_dev_learning.py` | 56-task cold-start learning benchmark (supports Anthropic + OpenAI) |
+| `eval/eval_project.py` | 15-task portfolio risk analyzer session |
+| `eval/eval_real_world.py` | 30 hard tasks |
+| `eval/results/` | JSON run logs |
+| `tests/test_brain.py` | BrainAgent unit tests (offline, stubbed) |
+| `tests/test_trajectory.py` | TrajectoryDetector + developer week simulation (offline, stubbed) |
 
 ---
 
 ## Limitations
 
-- **Probe tests need a known failure mode.** They catch localized bugs — a wrong formula, a missed edge case, a boundary condition. When the whole algorithm approach is wrong, probe feedback alone can't recover it (seen in the extensive benchmark: segment tree, Kruskal's MST).
-- **kNN signal needs warm-up.** The trajectory and code-snippet stores need ~50 traces with mixed outcomes before predictions are reliable. The stall detector and probe tests work immediately; logical failure patterns fire after the first stored failure; trajectory kNN activates after 10 stored runs.
-- **Trace richness is required.** One-liner responses produce near-identical embeddings regardless of correctness. Use a tool-calling agent or wrap any text model in a CoT prompt that forces step-by-step output.
-- **Verifier quality sets the ceiling.** Mislabeled traces corrupt the kNN store. Prefer programmatic checks; when using an LLM judge, always use a different model than the one being evaluated.
-- **Brain is most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare and marginal gains are small. Below ~60%, the store fills quickly with failures but the model may need a fundamentally different approach rather than mid-turn correction.
+- **Cannot prevent the first occurrence.** The brain learns from failure — it cannot warn about something it has never seen. Seed the store manually with `:seed` in `demo_session.py` for known failure modes.
+- **Embedding retrieval is coarse.** Cosine similarity between abstract motif descriptions and short task prompts can be low (~0.05–0.10 with OpenAI embeddings). Motifs with similarity below `retrieval_min_sim` never reach the judge. Effective when task text and motif description share vocabulary; weaker for terse prompts.
+- **Judge model matters for quote compliance.** Smaller models (gpt-4o-mini, Haiku) paraphrase instead of copy-pasting verbatim quotes — the grounding check rejects these. Use a stronger model (gpt-4o, claude-sonnet) for the judge when accuracy matters.
+- **Most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare. Below ~60%, the model likely needs a fundamentally different approach rather than mid-turn correction.
+- **Motif quality depends on extraction.** If the extraction LLM produces a motif with task-specific field names in `required_condition`, it will fail to generalize to surface-different recurrences.
+
+---
+
+## Negative results
+
+- **kNN trajectory scoring produced false positives.** Embedding-based `p_fail` scores (earlier versions) caused cross-domain contamination. Removed entirely. The verbatim-quote grounding requirement eliminates this class of error.
+- **`eval_extensive` fires didn't help.** 5 fires, 0 tasks fixed. Motif correction works for localized logical errors, not wrong algorithmic approaches.
+- **GSM8K is too easy.** Models solve grade-school math at >95% — nothing to learn from.
+- **Intervention is failure-rate-dependent.** When pass rate is above 90%, the store fills slowly and motifs stay sparse. The system adds value most when there is a recurring failure class to learn from.
