@@ -33,82 +33,173 @@ sys.path.insert(0, str(_ROOT))
 
 from trace_use.brain import BrainAgent
 from trace_use.agents import build_embedder
+from trace_use.config import BrainConfig
 
-HAIKU = "claude-haiku-4-5-20251001"
+# Auto-detect provider: prefer OpenAI when OPENAI_API_KEY is set; fall back to Anthropic.
+# Override with --provider anthropic|openai on the CLI.
+_HAS_OPENAI    = bool(os.environ.get("OPENAI_API_KEY"))
+_HAS_ANTHROPIC = bool(os.environ.get("ANTHROPIC_API_KEY"))
+_PROVIDER    = "openai" if _HAS_OPENAI else "anthropic"
+_MODEL       = "gpt-4o-mini" if _PROVIDER == "openai" else "claude-haiku-4-5-20251001"
+# Judge needs stronger instruction-following than the tool agent.
+# gpt-4o-mini returns paraphrases instead of verbatim quotes → grounding check rejects them.
+_JUDGE_MODEL = "gpt-4o" if _PROVIDER == "openai" else "claude-haiku-4-5-20251001"
 
 OUT = _ROOT / "eval" / "results"
 OUT.mkdir(exist_ok=True)
 
 
-# ── Temperature-aware tool agent ──────────────────────────────────────────────
+def _retry_call(fn, *args, **kwargs):
+    """Call fn(*args, **kwargs) with exponential-backoff retry on 429/5xx."""
+    last = None
+    for attempt in range(5):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as _e:
+            last = _e
+            code = (getattr(getattr(_e, "response", None), "status_code", None)
+                    or getattr(_e, "status_code", None))
+            if code is not None and (code == 429 or code >= 500):
+                wait = min(4 ** attempt, 60)
+                print(f"  [RATE LIMIT {code}] backing off {wait}s (attempt {attempt+1}/5)")
+                time.sleep(wait)
+            else:
+                raise
+    raise last
 
-def _make_tool_agent(temperature: float = 0.3, max_turns: int = 5, max_tokens: int = 4096):
-    """tool_agent variant with configurable temperature. Does not modify agents.py."""
+
+# ── Provider-aware tool agent ─────────────────────────────────────────────────
+
+def _make_tool_agent(temperature: float = 0.3, max_turns: int = 5, max_tokens: int = 4096,
+                     provider: str = _PROVIDER, model: str = _MODEL):
+    """tool_agent variant with configurable temperature, supporting Anthropic and OpenAI."""
     from trace_use.tools import TOOL_DEFINITIONS, dispatch
-    import anthropic
     import json as _json
 
-    tool_defs = [t for t in TOOL_DEFINITIONS if t["name"] == "python_exec"]
+    anthropic_tool_defs = [t for t in TOOL_DEFINITIONS if t["name"] == "python_exec"]
+    # OpenAI tool format wraps input_schema as "parameters" inside a "function" object.
+    openai_tool_defs = [
+        {"type": "function", "function": {
+            "name": t["name"], "description": t["description"],
+            "parameters": t["input_schema"],
+        }} for t in anthropic_tool_defs
+    ]
+
     _client_holder: list = [None]
 
-    def agent(prompt: str):
+    def _get_client():
         if _client_holder[0] is None:
-            _client_holder[0] = anthropic.Anthropic()
-        _client = _client_holder[0]
+            if provider == "openai":
+                from openai import OpenAI
+                _client_holder[0] = OpenAI()
+            else:
+                import anthropic
+                _client_holder[0] = anthropic.Anthropic()
+        return _client_holder[0]
 
+    def _run_turn_anthropic(client, messages):
+        r = _retry_call(
+            client.messages.create,
+            model=model, max_tokens=max_tokens, temperature=temperature,
+            tools=anthropic_tool_defs, messages=messages,
+        )
+        text_blocks, tool_calls_raw = [], []
+        for block in r.content:
+            if block.type == "text":
+                text_blocks.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls_raw.append(("anthropic", block))
+        tokens = r.usage.input_tokens + r.usage.output_tokens
+        done = r.stop_reason == "end_turn"
+        return text_blocks, tool_calls_raw, tokens, done, r.content
+
+    def _run_turn_openai(client, messages):
+        r = _retry_call(
+            client.chat.completions.create,
+            model=model, max_tokens=max_tokens, temperature=temperature,
+            tools=openai_tool_defs, messages=messages,
+        )
+        choice = r.choices[0]
+        msg = choice.message
+        text_blocks = [msg.content] if msg.content else []
+        tool_calls_raw = [("openai", tc) for tc in (msg.tool_calls or [])]
+        tokens = r.usage.prompt_tokens + r.usage.completion_tokens
+        done = choice.finish_reason == "stop"
+        return text_blocks, tool_calls_raw, tokens, done, msg
+
+    def agent(prompt: str):
+        client = _get_client()
         messages = [{"role": "user", "content": prompt}]
         trace_parts: list[str] = []
         total_tokens = 0
         monitor = getattr(agent, "monitor", None)
 
         for _ in range(max_turns):
-            r = _client.messages.create(
-                model=HAIKU,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                tools=tool_defs,
-                messages=messages,
-            )
-            total_tokens += r.usage.input_tokens + r.usage.output_tokens
+            if provider == "openai":
+                text_blocks, tool_calls_raw, tok, done, raw_msg = _run_turn_openai(client, messages)
+            else:
+                text_blocks, tool_calls_raw, tok, done, raw_msg = _run_turn_anthropic(client, messages)
+            total_tokens += tok
 
-            tool_results = []
-            for block in r.content:
-                if block.type == "text":
-                    trace_parts.append(block.text)
-                    if monitor:
-                        monitor.push(block.text)
-                elif block.type == "tool_use":
-                    pre_result = None
-                    if monitor and hasattr(monitor, "before_tool_call"):
-                        pre_result = monitor.before_tool_call(block.name, block.input)
-                    if pre_result is not None:
-                        result = pre_result
-                    else:
-                        result = dispatch(block.name, block.input)
-                    if monitor and hasattr(monitor, "on_tool_call"):
-                        modified = monitor.on_tool_call(block.name, block.input, result)
-                        if modified is not None:
-                            result = modified
+            for txt in text_blocks:
+                trace_parts.append(txt)
+                if monitor:
+                    monitor.push(txt)
 
-                    chunk = f"[tool:{block.name}({_json.dumps(block.input)})] → {result[:500]}"
-                    trace_parts.append(chunk)
-                    if monitor:
-                        monitor.push(chunk)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result[:4000],
-                    })
+            tool_result_msgs = []
+            anthropic_results = []
+            for kind, tc in tool_calls_raw:
+                if kind == "openai":
+                    name = tc.function.name
+                    try:
+                        input_dict = _json.loads(tc.function.arguments)
+                    except Exception:
+                        input_dict = {}
+                    tc_id = tc.id
+                else:  # anthropic
+                    name, input_dict, tc_id = tc.name, tc.input, tc.id
 
-            if r.stop_reason == "end_turn" or not tool_results:
+                pre = None
+                if monitor and hasattr(monitor, "before_tool_call"):
+                    pre = monitor.before_tool_call(name, input_dict)
+                result = pre if pre is not None else dispatch(name, input_dict)
+                if monitor and hasattr(monitor, "on_tool_call"):
+                    mod = monitor.on_tool_call(name, input_dict, result)
+                    if mod is not None:
+                        result = mod
+
+                chunk = f"[tool:{name}({_json.dumps(input_dict)})] → {result[:500]}"
+                trace_parts.append(chunk)
+                if monitor:
+                    monitor.push(chunk)
+
+                if kind == "openai":
+                    tool_result_msgs.append({"role": "tool", "tool_call_id": tc_id, "content": result[:4000]})
+                else:
+                    anthropic_results.append({"type": "tool_result", "tool_use_id": tc_id, "content": result[:4000]})
+
+            if done or not tool_calls_raw:
                 break
             if monitor and hasattr(monitor, "pulse"):
                 monitor.pulse()
             if monitor and getattr(monitor, "should_bail", False):
                 trace_parts.append("[EARLY_EXIT]")
                 break
-            messages.append({"role": "assistant", "content": r.content})
-            messages.append({"role": "user", "content": tool_results})
+
+            if provider == "openai":
+                # OpenAI: append assistant msg (with tool_calls), then tool result msgs
+                assistant_dict: dict = {"role": "assistant", "content": raw_msg.content}
+                if raw_msg.tool_calls:
+                    assistant_dict["tool_calls"] = [
+                        {"id": tc.id, "type": "function",
+                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                        for _, tc in tool_calls_raw
+                    ]
+                messages.append(assistant_dict)
+                messages.extend(tool_result_msgs)
+            else:
+                messages.append({"role": "assistant", "content": raw_msg})
+                messages.append({"role": "user", "content": anthropic_results})
 
         return "\n".join(trace_parts), total_tokens
 
@@ -1669,16 +1760,27 @@ def run_benchmark(use_brain: bool, temperature: float, max_tasks: int | None = N
     ordered = build_task_order(all_tasks)
     n_families = len(set(t.family for t in all_tasks))
 
+    # Fail fast if no API key is available
+    if not _HAS_OPENAI and not _HAS_ANTHROPIC:
+        print("ERROR: No API key found. Set OPENAI_API_KEY or ANTHROPIC_API_KEY.")
+        sys.exit(1)
+
     print("\n" + "═" * 72)
     print("  eval_dev_learning — Cold-start learning benchmark")
     mode = "brain-cold" if use_brain else "no-brain"
     print(f"  {len(ordered)} tasks | {n_families} families | mode={mode} | temp={temperature}")
+    print(f"  provider={_PROVIDER} | agent={_MODEL} | judge={_JUDGE_MODEL}")
     print("═" * 72)
 
     embedder = build_embedder()
     brain: BrainAgent | None = None
     if use_brain:
-        brain = BrainAgent(embedder, k=3, threshold=0.50)
+        brain_cfg = BrainConfig(
+            provider      = _PROVIDER,
+            judge_model   = _JUDGE_MODEL,   # gpt-4o: better verbatim-quote compliance
+            extract_model = _JUDGE_MODEL,   # gpt-4o: better structured JSON extraction
+        )
+        brain = BrainAgent(embedder, k=3, threshold=0.50, config=brain_cfg)
         # Cold start: NO seed_motifs() call
 
     agent = _make_tool_agent(temperature=temperature, max_turns=5)
@@ -1733,6 +1835,7 @@ def run_benchmark(use_brain: bool, temperature: float, max_tasks: int | None = N
             tokens=tokens, time_s=elapsed, motif_learned=motif_learned,
             fire_detail=fire_detail,
         ))
+        time.sleep(0.5)   # small inter-task pause to stay inside rate limits
 
     return results
 
@@ -1830,7 +1933,8 @@ def compute_and_print_metrics(results: list[TaskResult]) -> dict:
 
     summary = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model": HAIKU,
+        "agent_model": _MODEL,
+        "judge_model": _JUDGE_MODEL,
         "mode": "brain-cold",
         "temperature": "configured",
         "n_tasks": len(results),
@@ -1883,9 +1987,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Cold-start motif learning benchmark for developer tasks")
     parser.add_argument("--no-brain", action="store_true", help="Run without BrainAgent (baseline)")
     parser.add_argument("--brain-cold", action="store_true", help="Run with cold-start BrainAgent (default)")
-    parser.add_argument("--temperature", type=float, default=0.3, help="Haiku temperature (default 0.3)")
+    parser.add_argument("--temperature", type=float, default=0.3, help="Agent temperature (default 0.3)")
     parser.add_argument("--max-tasks", type=int, default=None, help="Stop after N tasks (for debugging)")
+    parser.add_argument("--provider", choices=["anthropic", "openai"], default=None,
+                        help="LLM provider override (default: auto-detect from env)")
     args = parser.parse_args()
+
+    # Allow CLI to override auto-detected provider
+    if args.provider:
+        global _PROVIDER, _MODEL, _JUDGE_MODEL
+        _PROVIDER    = args.provider
+        _MODEL       = "gpt-4o-mini" if _PROVIDER == "openai" else "claude-haiku-4-5-20251001"
+        _JUDGE_MODEL = "gpt-4o"      if _PROVIDER == "openai" else "claude-haiku-4-5-20251001"
 
     use_brain = not args.no_brain
     temperature = args.temperature

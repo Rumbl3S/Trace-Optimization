@@ -38,6 +38,7 @@ def _load_env() -> None:
 
 _load_env()
 _client = None
+_openai_chat_client = None
 
 
 def _anthropic_call(model: str, prompt: str, max_tokens: int = 512):
@@ -50,7 +51,7 @@ def _anthropic_call(model: str, prompt: str, max_tokens: int = 512):
     supports_temp = "opus-4" not in model
     kwargs = {"temperature": 0} if supports_temp else {}
     last = None
-    for attempt in range(4):
+    for attempt in range(5):
         try:
             r = _client.messages.create(model=model, max_tokens=max_tokens,
                                         messages=[{"role": "user", "content": prompt}],
@@ -58,14 +59,53 @@ def _anthropic_call(model: str, prompt: str, max_tokens: int = 512):
             return r.content[0].text, r.usage.input_tokens + r.usage.output_tokens
         except Exception as e:                              # noqa: BLE001
             last = e
-            # Back off on overload (529) or rate-limit (429); give up on others.
             code = getattr(getattr(e, 'response', None), 'status_code', None) or \
                    getattr(e, 'status_code', None)
-            if code in (429, 529):
-                time.sleep(4 ** attempt)   # 1s, 4s, 16s
+            # Retry on rate-limit (429), overload (529), and any other 5xx server error.
+            # Give up immediately on 4xx client errors (bad request, auth, etc.).
+            if code is not None and (code == 429 or code >= 500):
+                wait = min(4 ** attempt, 60)   # 1s, 4s, 16s, 60s, 60s
+                time.sleep(wait)
             else:
                 break
     raise last
+
+
+def _openai_call(model: str, prompt: str, max_tokens: int = 512):
+    """OpenAI text-only call (no tools). Returns (text, total_tokens)."""
+    global _openai_chat_client
+    if _openai_chat_client is None:
+        from openai import OpenAI
+        _openai_chat_client = OpenAI()
+    last = None
+    for attempt in range(5):
+        try:
+            r = _openai_chat_client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text   = r.choices[0].message.content or ""
+            tokens = r.usage.prompt_tokens + r.usage.completion_tokens
+            return text, tokens
+        except Exception as e:                              # noqa: BLE001
+            last = e
+            code = getattr(getattr(e, 'response', None), 'status_code', None) or \
+                   getattr(e, 'status_code', None)
+            if code is not None and (code == 429 or code >= 500):
+                wait = min(4 ** attempt, 60)
+                time.sleep(wait)
+            else:
+                break
+    raise last
+
+
+def _llm_call(provider: str, model: str, prompt: str, max_tokens: int = 512):
+    """Route to Anthropic or OpenAI based on provider string."""
+    if provider == "openai":
+        return _openai_call(model, prompt, max_tokens)
+    return _anthropic_call(model, prompt, max_tokens)
 
 
 def haiku(prompt: str):
@@ -430,9 +470,12 @@ def _build_openai():
 def build_embedder():
     """Return the best available embedder.
 
-    Tries sentence-transformers (local, free, no API key) first.
-    Falls back to OpenAI text-embedding-3-small if not installed.
+    Prefers OpenAI text-embedding-3-small when OPENAI_API_KEY is set (avoids
+    loading a local model and its GPU-cache disk writes on macOS).
+    Falls back to sentence-transformers (local, no API key needed) otherwise.
     """
+    if os.environ.get("OPENAI_API_KEY"):
+        return _build_openai()
     try:
         return _build_local_embedder()
     except ImportError:

@@ -3,249 +3,277 @@
 [![PyPI](https://img.shields.io/pypi/v/trace-use)](https://pypi.org/project/trace-use/)
 [![Python](https://img.shields.io/pypi/pyversions/trace-use)](https://pypi.org/project/trace-use/)
 
-**Learn failure patterns from LLM agent traces and intercept recurrences before they execute.**
+**A developer's failure memory — so you never make the same logical mistake twice.**
 
-`trace_use` attaches to any tool-use LLM agent, learns reusable logical failure patterns from past errors, and fires targeted interventions *before* the next occurrence executes — with zero false positives on held-out near-miss tasks.
-
----
-
-## The problem
-
-LLM agents fail in systematic, repeatable ways. The same logical mistake — retry all exceptions instead of selective ones, sort on a single key when a tiebreak is required — recurs across different tasks with different surface code. Every recurrence costs tokens on a failure → diagnosis → retry loop. Nothing prevents the mistake from appearing on the next task.
+`trace_use` learns from LLM agent failures, extracts the logical principle behind each one, and warns the agent before the next occurrence — even if it happened a week ago on completely different code.
 
 ---
 
-## How it works
+## The story
 
-When a task fails, the brain makes one background LLM call to extract *why* — not what the code looked like, but what logical requirement was violated. This produces a `FailureMotif`:
+Agents fail in patterns, not randomly. The same logical mistake — catching all exceptions instead of selective ones, sorting on a single key when a tiebreak is required, returning `None` instead of raising on a missing required field — recurs across different tasks, different code, different sessions. Each recurrence burns tokens on a failure → diagnosis → retry loop that was avoidable.
+
+`trace_use` intercepts at two points:
+
+| Layer | When | What it does |
+|---|---|---|
+| **`TrajectoryDetector`** | Before the LLM writes any code | Compares the task description against past failures; injects targeted warnings into the prompt |
+| **`BrainAgent`** | Before each `python_exec` call | Checks proposed code against stored motifs; fires a STOP message if the exact logical gap is present |
+
+---
+
+## How the learning works
+
+When a task fails, a single background LLM call extracts *why* — not what the code looked like, but what logical requirement was violated. This produces a `FailureMotif`:
 
 ```
 FailureMotif
-  required_condition:  "task requires selective retry based on error type"
+  id:                  "unconditional_retry_on_failure"
+  name:                "Retry Logic Does Not Differentiate Retryable Errors"
+  description:         "Retry logic does not distinguish between retryable
+                        and non-retryable exceptions."
+  required_condition:  "task requires selective retry based on error type or status code"
   violation_condition: "except Exception catches all types without type check"
-  recommendation:      "check exception type or .status_code before deciding to retry"
+  recommendation:      "check exception type or status code before deciding to retry"
 ```
 
-On every subsequent task, before `python_exec` runs, the brain retrieves candidate motifs by embedding similarity and asks an LLM judge: *can you find exact text in this task satisfying the required condition, and an exact line in this code matching the violation condition?* If both are concretely grounded in the actual text, the brain fires before execution. If either is absent, it stays silent.
+The motif is abstract — no variable names, no task-specific constants. In a 56-task benchmark, one failure on `retry_request` produced this motif. It then fired correctly on `retry_on_type` and `safe_request` — tasks with completely different code and vocabulary — converting both from failures to passes.
 
-The agent never executes the bad code, never reads wrong output, and never spends a turn diagnosing the error.
+Motifs persist to `~/.trace_use/motifs.json` across sessions. A developer who hits a retry-logic bug on Monday will get a warning injected into their prompt on Friday, before writing a single line of code.
 
 ---
 
-## Architecture
+## Two-layer detection
+
+### Layer 1 — TrajectoryDetector (pre-prompt, before any code is written)
+
+Before the LLM generates anything, the detector retrieves candidate motifs by embedding similarity and runs a cheap LLM judge call for each:
+
+> "Does this task explicitly mention the logical requirement that caused the past failure? Quote the exact text."
+
+The judge must return a verbatim quote from the task text — no paraphrasing. If found, a `KNOWN PITFALLS` block is prepended:
 
 ```
-BrainAgent
-├── push(text)
-│   └── accumulates live reasoning text from the agent's streaming output
-│
-├── before_tool_call(name, input_dict)  ← fires BEFORE code executes
-│   ├── retrieve candidate motifs (embedding cosine similarity ≥ 0.35, top_k=4)
-│   ├── for each candidate:
-│   │   ├── call applicability judge  (Haiku; structured JSON; max_tokens=320)
-│   │   └── validate deterministically (_validate_judge_result, threshold=0.80)
-│   └── if any motif passes both → return STOP/FIX message; else return None
-│
-├── on_tool_call(name, input_dict, result)  ← fires AFTER execution
-│   └── stall detection: ≥2 consecutive unproductive calls → redirect message
-│
-└── store(trace, label, metadata="")
-    └── label=0: extract one FailureMotif in a background thread (non-blocking)
-        ├── if motif is new → add to MotifStore with embedding
-        └── if motif matches existing (via update_id) → update and re-embed
+⚠️  KNOWN PITFALLS — based on recorded failures:
+
+  [1] Retry Logic Does Not Differentiate Retryable Errors
+      Why this applies: "only retry on ConnectionError or Timeout"
+      Watch out for:    Code may catch all exceptions instead of just the listed types.
+      Recommendation:   check exception type or status code before deciding to retry
+
+Address these before writing your implementation.
 ```
 
-### Signal 1 — Stall detector (fires from task 1, no stored history needed)
+### Layer 2 — BrainAgent (pre-execution, before each tool call)
 
-After 2+ consecutive unproductive `python_exec` calls (empty code or empty output), the brain injects:
-
-```
-[BRAIN — STALL after 2 unproductive calls]
-Stop repeating the same empty call. Try a completely different approach.
-```
-
-### Signal 2 — Learned-motif detection (fires after first failure of a class)
-
-On subsequent tasks, before each `python_exec` call:
-
-1. **Retrieve** candidate motifs by embedding similarity (cosine ≥ 0.35 floor)
-2. **Judge** each candidate with a Haiku call returning exact quotes:
-   ```json
-   {
-     "applies": true,
-     "confidence": 0.92,
-     "requirement_quote": "Only retry exceptions listed in retry_on.",
-     "violation_quote": "except Exception as e:",
-     "explanation": "code retries all exceptions instead of checking type",
-     "recommendation": "check type(e).__name__ in retry_on before retrying"
-   }
-   ```
-3. **Validate deterministically** (`_validate_judge_result`):
-   - `applies=true` and `confidence ≥ 0.80`
-   - Both quotes non-empty
-   - `recommendation` at least 10 characters
-   - No vague phrases (`"task implies"`, `"likely"`, `"might"`, `"probably"`, etc.)
-   - Both quotes grounded in actual task/code/reasoning text (substring match or ≥70% word overlap)
-4. **Fire** only when all checks pass — injects a STOP message before the bad code runs:
+Before each `python_exec` call, the brain checks the proposed code against stored motifs. The judge must return verbatim quotes from both the task description AND the proposed code. When both are found, a STOP message fires before the bad code runs:
 
 ```
 ⚠️ BRAIN:
 STOP: The monitor detected a likely logical failure before execution.
 
-Evidence (Learned pattern: Non-Selective Retry Catches All Exception Types):
+Evidence (Learned pattern: Retry Logic Does Not Differentiate Retryable Errors):
   - Requirement: Only retry exceptions listed in retry_on.
-  - Violation:   except Exception as e:
-  - Explanation: code retries all exceptions instead of checking type
+  - Violation:   except retry_on as e:
+  - Explanation: code retries unconditionally instead of checking type
 
 Required correction:
-  check type(e).__name__ in retry_on before retrying
+  check exception type or status code before retrying
 
 Revise the code before calling the tool again.
 ```
 
-### Why not p_fail or trajectory similarity?
-
-Prior iterations used embedding-based trajectory kNN and p_fail scores. These were removed because:
-
-- **False positive problem.** A finance task and a sorting task can have similar reasoning embeddings but completely unrelated failure modes.
-- **Vague interventions.** "This trajectory resembles past failures" gives the agent nothing actionable.
-- **The structured proof requirement solves both.** A retry motif cannot fire on a sort task because "selective retry" will not appear in a sort task's text. Cross-domain contamination is structurally impossible.
+Both layers share the same motif store. A motif learned mid-execution is immediately available for pre-prompt injection on the next task.
 
 ---
 
-## Wiring it up
+## False positive prevention
 
-```python
-from trace_use import BrainAgent, build_embedder, tool_agent
+Both layers use the same two-stage design: LLM judge for recall, deterministic gate for precision.
 
-brain         = BrainAgent(build_embedder(), k=4, threshold=0.80)
-agent         = tool_agent(["python_exec"], max_turns=8, model="claude-haiku-4-5-20251001")
-agent.monitor = brain                    # single line to attach
+The gate requires:
+- Confidence ≥ threshold (0.80 for execution-time, 0.70 for pre-prompt)
+- Both quotes non-empty and not vague (`"task implies"`, `"likely"`, `"might"`, etc.)
+- `requirement_quote` is a verbatim substring of the actual task text (or ≥70% word overlap)
+- `violation_quote` is a verbatim substring of the actual proposed code (or ≥70% word overlap)
 
-for i, task in enumerate(tasks):
-    brain.set_task(i, task=task["prompt"])
-    brain.reset()
+**Cross-domain contamination is structurally impossible.** A retry motif requires quoting the phrase "retry" from the task text — that phrase will not appear in a sort task. No similarity threshold to tune; the predicate either holds or it does not.
 
-    trace, tokens = agent(task["prompt"])
-    passed        = run_checks(trace)
-
-    # Always store first-attempt traces with first-attempt labels.
-    # Never store retry traces — they conflate recovery with failure patterns.
-    brain.store(trace, int(passed), metadata=task.get("failure_reason", ""))
-```
-
-### `BrainAgent` public API
-
-| Method / property | Description |
-|---|---|
-| `brain.set_task(idx, task="")` | Register the current task index and task description (passed to the judge for grounding) |
-| `brain.reset()` | Clear reasoning buffer and intervention counter before a new task |
-| `brain.push(text)` | Accumulate a reasoning chunk; called automatically by `tool_agent` monitor hook |
-| `brain.before_tool_call(name, input_dict)` | Pre-execution hook — returns STOP message or `None` |
-| `brain.on_tool_call(name, input_dict, result)` | Post-execution hook — stall detection; returns modified result or `None` |
-| `brain.store(trace, label, metadata="")` | Store a completed run; on `label=0`, extracts a motif in the background |
-| `brain.n_stored` | Number of learned motifs in the store |
-| `brain.last_fire` | Dict with task index, motif id, confidence, and both quotes from the most recent fire |
-
-### Storage invariant
-
-Always store the **first-attempt trace** with the **first-attempt label** — even when a retry fires and recovers a failed task. Storing retry traces conflates recovery patterns with failure patterns and produces motifs that fire on legitimate fix attempts.
+Result: **0% false positives on 16 near-miss tasks** across 8 failure families in the cold-start benchmark.
 
 ---
 
-## Results
-
-| Eval | Model | Tasks | Baseline | +Brain | Brain contribution |
-|---|---|---|---|---|---|
-| 30 diverse domains (`eval_fires`) | Haiku | 30 | 27/30 (90%) | 28/30 (93%) | +1 task, 5 fires |
-| Hard one-shot failures (`eval_hard`) | **Sonnet** | 14 | 12/14 (86%) | 13/14 (93%) | +1 task, 1 fire |
-| 30-task intensive (`eval_haiku_intensive`) | Haiku | 30 | 26/30 (87%) | 27/30 (90%) | +2 tasks, 2 fires |
-| Real-world hard tasks (`eval_real_world`) | Haiku | 30 | 28/30 (93%) | 29/30 (97%) | +1 task, 2 fires |
-| Extensive benchmark (`eval_extensive`) | Haiku | 32 | 28/32 (88%) | 28/32 (88%) | 0 tasks, 5 fires |
-| Portfolio Risk Analyzer (`eval_project`) | Haiku | 15 | 13/15 (87%) | 14/15 (93%) | +1 task, 4 fires |
-| **Cold-start learning (`eval_dev_learning`)** | **Haiku** | **56** | **43/56 (77%)** | **45/56 (80%)** | **+2 tasks; 0% FP on 16 near-miss tasks** |
-
----
-
-### Cold-start learning benchmark — 56 developer tasks
-
-The most targeted test for the motif system. 56 tasks across 8 programming families, structured so the brain must discover failure patterns from first occurrences and prevent recurrences — starting with zero stored history.
-
-**Structure:** 8 families × 7 tasks = 56 total
-- 1 discovery task per family (cold start)
-- 4 recurrence tasks per family (brain may fire if motif was learned)
-- 2 near-miss tasks per family (same domain, no actual bug — brain must stay silent)
-
-**Families:** `nested_key`, `shared_state`, `off_by_one`, `unit_scale`, `secondary_sort`, `api_key`, `validation_all_errors`, `retry_classification`
-
-| Metric | Value |
-|---|---|
-| Overall pass rate | **87.5%** (49/56) |
-| Motifs extracted | **2/2** (100% of failed discovery tasks produced a learnable motif) |
-| Recurrence prevention — retry_classification | **2/4** (50% of recurrences caught and fixed) |
-| False positive rate on near-miss tasks | **0%** (0/16) |
-
-**What the brain caught — retry_classification:**
-
-Task 8 failed: agent wrote `except Exception` instead of checking `type(e).__name__ in retry_on`. The extracted motif fired on tasks 16 (`retry_on_type`) and 32 (`safe_request`) — different prompts, different exception types, same underlying logical error — before execution in both cases. Both passed after correction.
-
-**Why api_key recurrences were not caught:**
-
-The `silent_failure_instead_of_exception` motif was correctly learned from `extract_items`. But api_key recurrence failures (tasks 11, 19, 27) had a different root cause — incorrect response key mapping. The brain correctly produced no grounded quotes for these and stayed silent. Firing would have been a false positive.
-
----
-
-### Portfolio Risk Analyzer — 15 sequential tasks
-
-| # | Task | Baseline | +Brain |
-|---|---|---|---|
-| 3 | Rolling 20-day statistics (mean, vol, skew) | **✗** | **✓ ⚡×1 FIXED** |
-| 14 | Monthly rebalancing with transaction costs | **✗** | **✗** ⚡×2 |
-| All others (13) | — | ✓ | ✓ |
-
-Haiku computed `returns.rolling(window).mean().std()` (std of rolling averages) instead of `returns.rolling(window).std()` (rolling std). Wrong volatility at Task 3 would have propagated silently into covariance (Task 4), Sharpe (Task 10), and the final risk report (Task 15). The brain caught it before execution.
-
----
-
-### Hard one-shot failures — Sonnet + Brain
-
-14 tasks where Sonnet reliably fails in one shot: 7 algorithm tasks and 7 physics/probability problems.
-
-| | Baseline | +Brain |
-|---|---|---|
-| Code tasks (7) | 6/7 | **7/7** |
-| Text tasks (7) | 6/7 | 6/7 |
-| **Overall** | **12/14 (86%)** | **13/14 (93%)** |
-
-The brain fixed the histogram (largest rectangle) task — Sonnet's first implementation used naive O(n²) and produced wrong results on edge cases.
-
----
-
-## Install
+## Quick start
 
 ```bash
 pip install trace-use
 ```
 
-Or from source:
+Works with **Anthropic** or **OpenAI** — set whichever key you have:
 
 ```bash
-git clone https://github.com/Rumbl3S/Trace-Optimization.git
-cd Trace-Optimization
-pip install -e .
+export ANTHROPIC_API_KEY=sk-ant-...   # uses claude-haiku-4-5
+# or
+export OPENAI_API_KEY=sk-proj-...     # uses gpt-4o-mini (agent) + gpt-4o (judge)
 ```
 
-Set your API key:
+`build_embedder()` prefers OpenAI embeddings when `OPENAI_API_KEY` is set (avoids loading a local model). Falls back to `sentence-transformers` (free, no key needed) otherwise.
+
+### Minimal setup
+
+```python
+from trace_use import (
+    BrainAgent, PersistentMotifStore, TrajectoryDetector,
+    BrainConfig, build_embedder, tool_agent,
+)
+
+embedder = build_embedder()
+store    = PersistentMotifStore(embedder)           # loads ~/.trace_use/motifs.json
+detector = TrajectoryDetector(store, embedder)      # pre-task injection
+brain    = BrainAgent(embedder, motif_store=store)  # mid-execution interception
+
+agent         = tool_agent(["python_exec"], max_turns=8)
+agent.monitor = brain
+
+for i, task in enumerate(tasks):
+    brain.set_task(i, task=task["prompt"])
+    brain.reset()
+
+    # Layer 1: inject known pitfalls before the LLM starts
+    enriched_prompt, matches = detector.inject(task["prompt"])
+    if matches:
+        print(f"⚠️  {len(matches)} pitfall(s) injected")
+
+    # Layer 2: brain fires mid-execution via agent.monitor
+    trace, tokens = agent(enriched_prompt)
+    passed = run_checks(trace)
+
+    # Always store the first-attempt trace with the first-attempt label
+    brain.store(trace, int(passed), metadata=failure_reason_if_failed)
+```
+
+### Interactive terminal demo
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+python demo_session.py           # inspect mode: type tasks, see what warnings fire
+python demo_session.py --run     # run mode: actually executes tasks with the agent
+python demo_session.py --show    # list all stored motifs
+python demo_session.py --clear   # wipe motif store
+python demo_session.py --store ./my_project.json   # project-specific store
 ```
 
-Run the offline test suite (no API key needed):
+---
 
-```bash
-pytest tests/ -q
+## API reference
+
+### `TrajectoryDetector`
+
+| Method | Description |
+|---|---|
+| `detector.check(task)` | Returns `list[MotifMatch]` — relevant motifs with grounded evidence |
+| `detector.inject(task)` | Returns `(enriched_prompt, matches)` — prepends KNOWN PITFALLS block if matches exist |
+
+### `BrainAgent`
+
+| Method / property | Description |
+|---|---|
+| `brain.set_task(idx, task="")` | Register task index and description before each task |
+| `brain.reset()` | Clear reasoning buffer and counters before each task |
+| `brain.push(text)` | Accumulate reasoning chunk — called automatically via `agent.monitor` |
+| `brain.before_tool_call(name, input_dict)` | Pre-execution hook — returns STOP message or `None` |
+| `brain.on_tool_call(name, input_dict, result)` | Post-execution stall detection |
+| `brain.store(trace, label, metadata="")` | Store result; extracts motif on `label=0` (failure) |
+| `brain.n_stored` | Number of learned motifs |
+| `brain.last_fire` | Dict with motif id, confidence, and verbatim quotes from the most recent fire |
+
+### `PersistentMotifStore`
+
+```python
+store = PersistentMotifStore(embedder)                     # default: ~/.trace_use/motifs.json
+store = PersistentMotifStore(embedder, path="./proj.json") # project-specific
+store.clear()                                              # wipe all motifs
+store.count                                                # number of stored motifs
+store.motifs                                               # list[FailureMotif]
 ```
+
+### Configuration
+
+All tunable constants live in `BrainConfig` / `DetectorConfig`. The `provider` field selects the LLM backend:
+
+```python
+from trace_use import BrainConfig, DetectorConfig, BrainAgent, TrajectoryDetector
+
+# OpenAI backend — gpt-4o for judge (verbatim-quote compliance), gpt-4o-mini for agent
+brain_cfg = BrainConfig(
+    provider      = "openai",           # "anthropic" (default) or "openai"
+    judge_model   = "gpt-4o",           # stronger model for judge accuracy
+    extract_model = "gpt-4o",
+    judge_threshold  = 0.80,            # min confidence to fire
+    max_interventions = 2,              # max fires per task
+    exec_tool_name   = "python_exec",   # tool name to intercept
+)
+brain = BrainAgent(embedder, config=brain_cfg)
+
+# Anthropic backend
+brain_cfg = BrainConfig(
+    provider    = "anthropic",
+    judge_model = "claude-haiku-4-5-20251001",
+)
+
+det_cfg = DetectorConfig(
+    provider        = "openai",
+    model           = "gpt-4o",
+    judge_threshold = 0.70,
+    retrieval_top_k = 5,
+    storage_path    = "./project_motifs.json",
+)
+detector = TrajectoryDetector(store, embedder, config=det_cfg)
+```
+
+### Storage invariant
+
+Always store the **first-attempt trace** with the **first-attempt label** — even when a retry fires and recovers a failed task. Storing retry traces conflates recovery patterns with failure patterns.
+
+---
+
+## Results
+
+### Cold-start learning — 56 tasks, 8 failure families (`eval_dev_learning`)
+
+The core benchmark. 56 tasks across 8 programming families (nested key access, shared state, API key mapping, validation, off-by-one, unit scaling, secondary sort, retry classification). Each family has 1 discovery task (brain cold-starts with no motifs), 4 recurrence tasks (brain fires if a motif was learned), and 2 near-miss tasks (same domain, correct code — brain must stay silent).
+
+Run: `gpt-4o-mini` agent, `gpt-4o` judge, OpenAI embeddings.
+
+| Metric | Value |
+|---|---|
+| Overall pass rate | **82.1%** (46/56) |
+| Tasks saved by brain fires | **4** (retry_on_type, safe_request, merge_response_lists, rank_leaderboard) |
+| False positive rate on 16 near-miss tasks | **0%** |
+| Motif generalization | retry_request → retry_on_type + safe_request (different code, same logical error) |
+
+**What a fire looks like in practice:**
+
+```
+[BRAIN JUDGE RAW] motif='unconditional_retry_on_failure' applies=True conf=1.00
+  req='Only retry exceptions listed in retry_on.'
+  viol='except retry_on as e:'
+[BRAIN FIRE] motif: unconditional_retry_on_failure, conf: 1.00
+[16/56] retry_on_type   retry_classification   | PASS [FIRED] | 13.4s
+```
+
+The agent wrote `except retry_on as e:` — iterating the list as a catch-all instead of checking type membership. The brain caught this, injected a STOP, the agent corrected the code, and the task passed.
+
+**Where it didn't fire:**
+
+The api_key and nested_key families had recurring failures that the brain missed. Root cause: embedding similarity between abstract motif descriptions and concrete task prompts was below the retrieval threshold (~0.05–0.09 cosine similarity), so those motifs never reached the judge. This is an active limitation — the pre-filter is too coarse for short, concrete task descriptions.
+
+### Portfolio Risk Analyzer — 15 sequential tasks (`eval_project`)
+
+Task 3 (rolling statistics) failed: the agent computed `returns.rolling(window).mean().std()` instead of `returns.rolling(window).std()`. Wrong volatility at Task 3 would have propagated silently into covariance (Task 4), Sharpe ratio (Task 10), and the final risk report (Task 15). Brain caught it before execution.
+
+### Where brain fires don't help
+
+`eval_extensive` — 5 fires, 0 tasks fixed. When a task fails because the entire algorithm is wrong (bitmask TSP that needs DP from scratch), motif-based feedback cannot recover it. The brain's value is highest when the error is localized — a boundary condition, a missing type check, a swallowed exception — not when the approach itself needs replacing.
 
 ---
 
@@ -253,34 +281,34 @@ pytest tests/ -q
 
 | Path | Role |
 |---|---|
-| `trace_use/brain.py` | `BrainAgent`, `MotifStore`, `FailureMotif` — the full motif detection system |
-| `trace_use/agents.py` | `tool_agent`, `haiku`, `opus`, `build_embedder` (lazy clients, keys from env/`.env`) |
-| `trace_use/pipeline.py` | `run_task`, `Forecaster`, verifiers — kNN-based retry orchestration |
-| `eval/eval_dev_learning.py` | 56-task cold-start learning benchmark |
+| `trace_use/brain.py` | `BrainAgent`, `MotifStore`, `FailureMotif` — mid-execution motif detection |
+| `trace_use/trajectory.py` | `TrajectoryDetector`, `MotifMatch` — pre-task pre-prompt injection |
+| `trace_use/motif_store.py` | `PersistentMotifStore` — JSON-backed cross-session persistence |
+| `trace_use/config.py` | `BrainConfig`, `DetectorConfig` — all tunable constants |
+| `trace_use/agents.py` | `tool_agent`, `haiku`, `opus`, `build_embedder`, `_llm_call` |
+| `demo_session.py` | Interactive TUI: inspect trajectory detection, teach the system |
+| `eval/eval_dev_learning.py` | 56-task cold-start learning benchmark (supports Anthropic + OpenAI) |
 | `eval/eval_project.py` | 15-task portfolio risk analyzer session |
-| `eval/eval_real_world.py` | 30 hard tasks: competitive programming + GPQA-style science |
-| `eval/eval_hard.py` | 14 hard one-shot failures, Sonnet + Haiku |
-| `eval/eval_extensive.py` | 32 tasks: LiveCodeBench Pro / ICPC-Eval difficulty |
-| `eval/eval_fires.py` | 30-task brain eval, diverse domains |
-| `eval/eval_haiku_intensive.py` | 30-task intensive haiku session |
-| `eval/results/` | Saved charts and JSON run logs |
-| `tests/` | Offline test suite: `test_brain.py`, `test_forecast.py`, `test_pipeline.py` |
+| `eval/eval_real_world.py` | 30 hard tasks |
+| `eval/results/` | JSON run logs |
+| `tests/test_brain.py` | BrainAgent unit tests (offline, stubbed) |
+| `tests/test_trajectory.py` | TrajectoryDetector + developer week simulation (offline, stubbed) |
 
 ---
 
 ## Limitations
 
-- **Motifs need a discovery failure to activate.** The brain cannot prevent the first occurrence of a failure class, only recurrences.
-- **Retrieval is high-recall, not high-precision.** The 0.35 similarity floor retrieves liberally; the applicability judge narrows. On a 10-motif store, typically 1–3 LLM judge calls fire per task, adding ~300–600ms latency to `before_tool_call`.
-- **Motif generalization depends on abstraction quality.** If the extraction call produces a motif with task-specific field names in `required_condition`, it will fail to fire on surface-different recurrences.
-- **Trace richness is required.** One-liner responses produce near-identical embeddings regardless of correctness. Use a tool-calling agent, or wrap any text model in a CoT prompt that forces step-by-step output.
-- **Brain is most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare and gains are marginal. Below ~60%, the model likely needs a fundamentally different approach rather than mid-turn correction.
+- **Cannot prevent the first occurrence.** The brain learns from failure — it cannot warn about something it has never seen. Seed the store manually with `:seed` in `demo_session.py` for known failure modes.
+- **Embedding retrieval is coarse.** Cosine similarity between abstract motif descriptions and short task prompts can be low (~0.05–0.10 with OpenAI embeddings). Motifs with similarity below `retrieval_min_sim` never reach the judge. Effective when task text and motif description share vocabulary; weaker for terse prompts.
+- **Judge model matters for quote compliance.** Smaller models (gpt-4o-mini, Haiku) paraphrase instead of copy-pasting verbatim quotes — the grounding check rejects these. Use a stronger model (gpt-4o, claude-sonnet) for the judge when accuracy matters.
+- **Most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare. Below ~60%, the model likely needs a fundamentally different approach rather than mid-turn correction.
+- **Motif quality depends on extraction.** If the extraction LLM produces a motif with task-specific field names in `required_condition`, it will fail to generalize to surface-different recurrences.
 
 ---
 
 ## Negative results
 
-- **GSM8K is too easy.** Haiku solves grade-school math at >95% with no interventions.
-- **kNN trajectory scoring produces false positives.** Embedding-based trajectory similarity (p_fail, Markov state tracking) was removed: two tasks with similar reasoning vocabulary spill into each other's motifs regardless of actual logical relationship. The structured proof requirement eliminates this class of error entirely.
-- **Intervention is failure-rate-dependent.** When pass rate is above 90%, the store fills slowly with failures and motifs remain sparse. The brain adds value most when there is a recurring failure class.
-- **`eval_extensive` fires didn't help.** 5 fires, 0 tasks fixed. When a task fails because the entire algorithm approach is wrong, motif-based feedback cannot recover it.
+- **kNN trajectory scoring produced false positives.** Embedding-based `p_fail` scores (earlier versions) caused cross-domain contamination. Removed entirely. The verbatim-quote grounding requirement eliminates this class of error.
+- **`eval_extensive` fires didn't help.** 5 fires, 0 tasks fixed. Motif correction works for localized logical errors, not wrong algorithmic approaches.
+- **GSM8K is too easy.** Models solve grade-school math at >95% — nothing to learn from.
+- **Intervention is failure-rate-dependent.** When pass rate is above 90%, the store fills slowly and motifs stay sparse. The system adds value most when there is a recurring failure class to learn from.

@@ -16,6 +16,21 @@ contradictions — without kNN scoring, p_fail, or combined weights.
 
 Fire rule: at least one judged motif must produce a concrete, grounded
 requirement_quote AND violation_quote. No numeric p_fail trigger.
+
+Configuration
+─────────────
+All tunable constants live in BrainConfig (trace_use/config.py).
+Pass config= to override defaults without subclassing:
+
+    cfg   = BrainConfig(judge_model="claude-sonnet-4-6", judge_threshold=0.75)
+    brain = BrainAgent(embedder, config=cfg)
+
+Persistence
+───────────
+Pass a PersistentMotifStore to share motifs across sessions:
+
+    store = PersistentMotifStore(embedder)
+    brain = BrainAgent(embedder, motif_store=store)
 """
 from __future__ import annotations
 
@@ -104,20 +119,28 @@ PATTERN:
   Fix: {motif_recommendation}
 
 STEPS:
-1. Find text in TASK or REASONING that satisfies "{required_condition}". Quote it exactly.
-2. Find a line in CODE or REASONING that matches "{violation_condition}". Quote it exactly.
-3. If both found → applies=true, fill in the quotes and give a one-line fix.
+1. Find text in TASK or REASONING that satisfies "{required_condition}".
+   COPY-PASTE the exact words — do NOT rephrase, summarize, or describe.
+   Bad: "The task involves extracting data from a dict"
+   Good: "returns the item from response['data']"  ← actual words from the TASK text above
+
+2. Find a line in PROPOSED CODE that shows "{violation_condition}".
+   COPY-PASTE the exact code line — do NOT describe what the code does.
+   Bad: "The code assumes a specific key exists"
+   Good: "return data['next_cursor']"  ← actual line from the CODE above
+
+3. If both verbatim quotes found → applies=true, fill them in.
 4. If either is missing → applies=false, leave quotes empty.
 
 Do NOT answer yes because the task domain or vocabulary is similar.
-Answer yes only when both quotes are concretely findable in the actual text above.
+Answer yes ONLY when both quotes are copy-pasted verbatim from the actual text above.
 
 Return JSON only (no markdown, no extra text after the closing brace):
 {{
   "applies": <true|false>,
   "confidence": <0.0-1.0>,
-  "requirement_quote": "<exact text from task/reasoning, or empty string>",
-  "violation_quote": "<exact code line or reasoning sentence, or empty string>",
+  "requirement_quote": "<verbatim copy-paste from TASK or REASONING, or empty string>",
+  "violation_quote": "<verbatim copy-paste of exact CODE line showing the bug, or empty string>",
   "explanation": "<one sentence why this matches>",
   "recommendation": "<concrete one-line fix, or empty string>"
 }}
@@ -275,15 +298,16 @@ class FailureMotif:
 class MotifStore:
     """Stores learned motifs and retrieves candidates by embedding similarity.
 
-    Retrieval is high-recall (top-k with a minimum similarity floor).
+    Retrieval is high-recall (top-k with a configurable similarity floor).
     The applicability judge, not retrieval score, decides whether to fire.
     """
 
     def __init__(self, embedder: Callable):
-        self._embedder = embedder
+        self._embedder   = embedder
         self._motifs:  list[FailureMotif]                    = []
         self._vecs:    list[tuple[np.ndarray, FailureMotif]] = []
-        self._lock     = threading.Lock()
+        self._lock       = threading.Lock()
+        self._last_scores: list[tuple[float, str]] = []   # (sim, motif_id) for diagnostics
 
     def add(self, motif: FailureMotif, signal_text: str = "") -> None:
         embed_text = signal_text or f"{motif.description} {motif.recommendation}"
@@ -312,9 +336,14 @@ class MotifStore:
         return False
 
     def retrieve(
-        self, task: str, reasoning: str, code: str, top_k: int = 4,
+        self,
+        task: str,
+        reasoning: str,
+        code: str,
+        top_k: int = 4,
+        min_sim: float = 0.35,
     ) -> list[FailureMotif]:
-        """Return top-k motifs by embedding similarity; min cosine similarity 0.35."""
+        """Return top-k motifs by embedding similarity above min_sim."""
         with self._lock:
             vecs = list(self._vecs)
         if not vecs:
@@ -328,7 +357,8 @@ class MotifStore:
             ((float(np.dot(qvec, v)), m) for v, m in vecs),
             reverse=True,
         )
-        return [m for sim, m in scored[:top_k] if sim >= 0.35]
+        self._last_scores = [(sim, m.id) for sim, m in scored]  # for diagnostics
+        return [m for sim, m in scored[:top_k] if sim >= min_sim]
 
     @property
     def motifs(self) -> list[FailureMotif]:
@@ -344,9 +374,9 @@ class MotifStore:
 # ── Fire message ──────────────────────────────────────────────────────────────
 
 def _make_fire_message(result: dict, motif_name: str = "") -> str:
-    req_quote  = result.get("requirement_quote", "")
-    viol_quote = result.get("violation_quote", "")
-    explanation = result.get("explanation", result.get("motif_match_explanation", ""))
+    req_quote      = result.get("requirement_quote", "")
+    viol_quote     = result.get("violation_quote", "")
+    explanation    = result.get("explanation", result.get("motif_match_explanation", ""))
     recommendation = result.get("recommendation", "")
     header = f"Learned pattern: {motif_name}" if motif_name else "Learned failure pattern"
     lines = [
@@ -377,6 +407,11 @@ class BrainAgent:
         trace, tokens = agent(prompt)
         brain.store(trace, label, failure_reason)
 
+    For cross-session persistence, pass a PersistentMotifStore::
+        from trace_use import PersistentMotifStore
+        store = PersistentMotifStore(embedder)
+        brain = BrainAgent(embedder, motif_store=store)
+
     Hooks called by the agent:
         push(text)                       → accumulate reasoning
         before_tool_call(name, inp)      → pre-execution; may return STOP message
@@ -384,22 +419,30 @@ class BrainAgent:
     """
 
     def __init__(
-        self, embedder: Callable, k: int = 4, threshold: float = 0.80,
+        self,
+        embedder:     Callable,
+        k:            int   = 4,
+        threshold:    float = 0.80,
+        config:       "BrainConfig | None" = None,   # type: ignore[name-defined]
+        motif_store:  "MotifStore | None"  = None,
         # legacy kwargs accepted but ignored
-        check_interval: float = 1.0, min_chars: int = 200,
+        check_interval: float = 1.0,
+        min_chars:      int   = 200,
     ):
-        self._embedder      = embedder
-        self._k             = k
-        self._fire_threshold = threshold
-        self._motif_store   = MotifStore(embedder)
+        from .config import BrainConfig as _BrainConfig
+        if config is None:
+            config = _BrainConfig(retrieval_top_k=k, judge_threshold=threshold)
+        self._cfg        = config
+        self._embedder   = embedder
+        self._motif_store = motif_store if motif_store is not None else MotifStore(embedder)
 
         # Per-task state
-        self._reasoning:       list[str] = []
-        self._current_task_str: str      = ""
-        self._task_idx:         int      = 0
-        self._interventions:    int      = 0
-        self._turn_count:       int      = 0
-        self._stall_streak:     int      = 0
+        self._reasoning:        list[str] = []
+        self._current_task_str: str       = ""
+        self._task_idx:         int       = 0
+        self._interventions:    int       = 0
+        self._turn_count:       int       = 0
+        self._stall_streak:     int       = 0
 
         # Audit
         self.last_fire:    dict | None = None
@@ -444,52 +487,57 @@ class BrainAgent:
         logical drift, missing assumptions, and plan-code contradictions.
         Trajectory contributes as evidence text, not as a numeric trigger.
         """
-        if name != "python_exec" or self._interventions >= 2:
+        if name != self._cfg.exec_tool_name or self._interventions >= self._cfg.max_interventions:
             return None
 
         code = (input_dict or {}).get("code", "")
         if not code.strip():
             return None
 
-        reasoning = "\n".join(self._reasoning[-20:])
+        reasoning  = "\n".join(self._reasoning[-self._cfg.reasoning_window:])
         candidates = self._motif_store.retrieve(
-            task=self._current_task_str, reasoning=reasoning,
-            code=code, top_k=self._k,
+            task=self._current_task_str, reasoning=reasoning, code=code,
+            top_k=self._cfg.retrieval_top_k,
+            min_sim=self._cfg.retrieval_min_sim,
         )
+        # Uncomment to debug retrieval: shows scores when no candidates pass threshold
+        # if not candidates and self._motif_store.count > 0:
+        #     top = self._motif_store._last_scores[:3]
+        #     top_str = ", ".join(f"{sid}={sim:.3f}" for sim, sid in top) if top else "none"
+        #     print(f"[BRAIN RETRIEVE] 0/{self._motif_store.count} motifs above "
+        #           f"min_sim={self._cfg.retrieval_min_sim:.2f} — top scores: {top_str}")
 
         for motif in candidates:
             result = self._call_judge(motif, code, self._current_task_str, reasoning)
             if result is None:
                 continue
             if _validate_judge_result(
-                result, self._current_task_str, code, reasoning, self._fire_threshold
+                result, self._current_task_str, code, reasoning,
+                self._cfg.judge_threshold,
             ):
                 self._record_fire(result, motif)
                 return _make_fire_message(result, motif.name)
-            else:
+            elif result.get("applies"):
+                # Judge said yes but grounding check failed — worth logging
                 print(f"[BRAIN JUDGE REJECTED] motif={motif.id!r} "
-                      f"req={result.get('requirement_quote','')[:50]!r} "
-                      f"viol={result.get('violation_quote','')[:50]!r}")
+                      f"req={result.get('requirement_quote','')[:60]!r} "
+                      f"viol={result.get('violation_quote','')[:60]!r}")
         return None
 
     # ── on_tool_call: reactive stall detection ────────────────────────────────
 
     def on_tool_call(self, name: str, input_dict: dict, result: str) -> str | None:
-        """Post-execution hook. Handles stall detection only.
-
-        Motif learning happens in store() after the full task completes,
-        not reactively mid-task, to avoid storing recovery patterns as failures.
-        """
+        """Post-execution hook. Handles stall detection only."""
         self._turn_count += 1
-        code = (input_dict or {}).get("code", "") if name == "python_exec" else ""
+        code = (input_dict or {}).get("code", "") if name == self._cfg.exec_tool_name else ""
         is_empty = not result or result.strip() in ("", "(no output)", "None")
-        no_input = not code.strip() if name == "python_exec" else (
+        no_input = not code.strip() if name == self._cfg.exec_tool_name else (
             not any(str(v).strip() for v in (input_dict or {}).values())
         )
 
         if no_input or is_empty:
             self._stall_streak += 1
-            if self._stall_streak >= 2 and self._interventions < 2:
+            if self._stall_streak >= self._cfg.stall_streak_threshold and self._interventions < self._cfg.max_interventions:
                 self._interventions += 1
                 msg = (
                     f"[BRAIN — STALL after {self._stall_streak} unproductive calls]\n"
@@ -514,7 +562,7 @@ class BrainAgent:
         code = _extract_code_from_trace(trace)
         if not code.strip():
             return
-        reasoning = "\n".join(self._reasoning[-20:])
+        reasoning = "\n".join(self._reasoning[-self._cfg.reasoning_window:])
         t = threading.Thread(
             target=self._extract_motif,
             args=(code, self._current_task_str, reasoning, metadata),
@@ -522,16 +570,16 @@ class BrainAgent:
             name="brain-extract",
         )
         t.start()
-        t.join(timeout=6.0)
+        t.join(timeout=self._cfg.extract_timeout)
 
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _call_judge(
         self, motif: FailureMotif, code: str, task: str, reasoning: str,
     ) -> dict | None:
-        """Ask haiku whether the motif concretely applies. Returns parsed JSON or None."""
+        """Ask the configured model whether the motif concretely applies."""
         try:
-            from .agents import _anthropic_call
+            from .agents import _llm_call
         except ImportError:
             return None
 
@@ -546,17 +594,21 @@ class BrainAgent:
             motif_recommendation = motif.recommendation,
         )
         try:
-            from .agents import _anthropic_call
-            text, _ = _anthropic_call("claude-haiku-4-5-20251001", prompt, max_tokens=320)
+            text, _ = _llm_call(
+                self._cfg.provider, self._cfg.judge_model, prompt,
+                max_tokens=self._cfg.judge_max_tokens,
+            )
             text = text.strip()
             if text.startswith("```"):
                 text = re.sub(r"^```[a-z]*\n?", "", text)
                 text = re.sub(r"\n?```$", "", text)
             result = _parse_json_first(text)
-            print(f"[BRAIN JUDGE RAW] motif={motif.id!r} applies={result.get('applies')} "
-                  f"conf={result.get('confidence', 0):.2f} "
-                  f"req={result.get('requirement_quote','')[:50]!r} "
-                  f"viol={result.get('violation_quote','')[:50]!r}")
+            # Only log when the judge thinks it applies — applies=False is the normal path
+            if result.get("applies"):
+                print(f"[BRAIN JUDGE RAW] motif={motif.id!r} applies=True "
+                      f"conf={result.get('confidence', 0):.2f} "
+                      f"req={result.get('requirement_quote','')[:60]!r} "
+                      f"viol={result.get('violation_quote','')[:60]!r}")
             return result
         except Exception as e:
             print(f"[BRAIN JUDGE ERROR] motif={motif.id!r} err={e!r}")
@@ -567,7 +619,7 @@ class BrainAgent:
     ) -> None:
         """LLM call to extract or update a learned motif from a failure."""
         try:
-            from .agents import _anthropic_call
+            from .agents import _llm_call
         except ImportError:
             return
 
@@ -577,14 +629,17 @@ class BrainAgent:
             if existing else "  (none yet)"
         )
         prompt = _EXTRACT_MOTIF_PROMPT.format(
-            task     = task[:400]     or "(not provided)",
-            reasoning= reasoning[-600:] or "(none)",
-            code     = code[:800],
-            reason   = reason[:300]   or "(not provided)",
-            existing = existing_lines,
+            task      = task[:400]      or "(not provided)",
+            reasoning = reasoning[-600:] or "(none)",
+            code      = code[:800],
+            reason    = reason[:300]    or "(not provided)",
+            existing  = existing_lines,
         )
         try:
-            text, _ = _anthropic_call("claude-haiku-4-5-20251001", prompt, max_tokens=400)
+            text, _ = _llm_call(
+                self._cfg.provider, self._cfg.extract_model, prompt,
+                max_tokens=self._cfg.extract_max_tokens,
+            )
             text = text.strip()
             if text.startswith("```"):
                 text = re.sub(r"^```[a-z]*\n?", "", text)
@@ -625,7 +680,7 @@ class BrainAgent:
                 updated = FailureMotif(
                     id                  = existing_motif.id,
                     name                = existing_motif.name,
-                    description         = motif.description or existing_motif.description,
+                    description         = motif.description         or existing_motif.description,
                     required_condition  = motif.required_condition  or existing_motif.required_condition,
                     violation_condition = motif.violation_condition or existing_motif.violation_condition,
                     recommendation      = motif.recommendation      or existing_motif.recommendation,
@@ -690,7 +745,6 @@ class BrainAgent:
     def all_vecs(self):
         return None, []
 
-    # Legacy attribute aliases used by use.py
     @property
     def _live_steps(self) -> list:
         return self._reasoning
@@ -701,7 +755,7 @@ class BrainAgent:
 
     @property
     def _threshold(self) -> float:
-        return self._fire_threshold
+        return self._cfg.judge_threshold
 
     def on_chunk(self, text: str) -> None:
         pass
