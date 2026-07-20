@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: trace-use
-Version: 0.1.3
+Version: 0.1.4
 Summary: Learn failure patterns from LLM agent traces and intercept recurrences before they execute.
 License-Expression: MIT
 Keywords: llm,agents,reliability,failure-prediction,ai
@@ -43,28 +43,31 @@ Agents fail in patterns, not randomly. The same logical mistake — catching all
 | Layer | When | What it does |
 |---|---|---|
 | **`TrajectoryDetector`** | Before the LLM writes any code | Compares the task description against past failures; injects targeted warnings into the prompt |
-| **`BrainAgent`** | Before each `python_exec` call | Checks proposed code against stored motifs; fires a STOP message if the exact logical gap is present |
+| **`BrainAgent`** | Before each `write_file` or `python_exec` call | Checks proposed code against stored motifs; fires a STOP message with a concrete fix if the exact logical gap is present |
 
 ---
 
 ## How the learning works
 
-When a task fails, a single background LLM call extracts *why* — not what the code looked like, but what logical requirement was violated. This produces a `FailureMotif`:
+When a task fails, a single background LLM call extracts *why* — not a description of the code, but a literal snippet showing the bug and what to change. This produces a `FailureMotif`:
 
 ```
 FailureMotif
-  id:                  "unconditional_retry_on_failure"
-  name:                "Retry Logic Does Not Differentiate Retryable Errors"
-  description:         "Retry logic does not distinguish between retryable
-                        and non-retryable exceptions."
-  required_condition:  "task requires selective retry based on error type or status code"
-  violation_condition: "except Exception catches all types without type check"
-  recommendation:      "check exception type or status code before deciding to retry"
+  id:                  "dp_obstacle_handling"
+  name:                "Incorrect DP obstacle handling logic"
+  description:         "DP state transitions fail to correctly account for
+                        obstacle constraints in path counting"
+  required_condition:  "EXACTLY k obstacle cells"
+  violation_condition: "dp[r][c][obs] += dp[r-1][c][obs-1] — adds paths
+                        without consuming obstacle slot; should index
+                        dp[r-1][c][obs] when grid[r][c]==0"
+  recommendation:      "change dp[r][c][obs] += dp[r-1][c][obs-1] to
+                        dp[r][c][obs] += dp[r-1][c][obs] when grid[r][c]==0"
 ```
 
-The motif is abstract — no variable names, no task-specific constants. In a 56-task benchmark, one failure on `retry_request` produced this motif. It then fired correctly on `retry_on_type` and `safe_request` — tasks with completely different code and vocabulary — converting both from failures to passes.
+`required_condition` is a short literal phrase that appears in any task where this bug recurs — not a meta-description. `violation_condition` quotes the exact buggy line and explains why it is wrong. Both are designed to be findable verbatim in future code and task text.
 
-Motifs persist to `~/.trace_use/motifs.json` across sessions. A developer who hits a retry-logic bug on Monday will get a warning injected into their prompt on Friday, before writing a single line of code.
+Motifs persist to `~/.trace_use/motifs.json` across sessions. A developer who hits a DP indexing bug on Monday will get a warning injected into their prompt on Friday, before writing a single line of code.
 
 ---
 
@@ -72,41 +75,44 @@ Motifs persist to `~/.trace_use/motifs.json` across sessions. A developer who hi
 
 ### Layer 1 — TrajectoryDetector (pre-prompt, before any code is written)
 
-Before the LLM generates anything, the detector retrieves candidate motifs by embedding similarity and runs a cheap LLM judge call for each:
-
-> "Does this task explicitly mention the logical requirement that caused the past failure? Quote the exact text."
-
-The judge must return a verbatim quote from the task text — no paraphrasing. If found, a `KNOWN PITFALLS` block is prepended:
+Before the LLM generates anything, the detector retrieves candidate motifs by embedding similarity and runs a cheap LLM judge call for each. The judge searches the task text for the motif's `required_condition` phrase and quotes it verbatim. If found, a `KNOWN PITFALLS` block is prepended:
 
 ```
 ⚠️  KNOWN PITFALLS — based on recorded failures:
 
-  [1] Retry Logic Does Not Differentiate Retryable Errors
-      Why this applies: "only retry on ConnectionError or Timeout"
-      Watch out for:    Code may catch all exceptions instead of just the listed types.
-      Recommendation:   check exception type or status code before deciding to retry
+  [1] Incorrect DP obstacle handling logic
+      Why this applies: "pass through EXACTLY k obstacle cells (marked 1)"
+      Watch out for:    DP update must track obstacle count as a separate state dimension.
+      Recommendation:   change dp[r][c][obs] += dp[r-1][c][obs-1] to
+                        dp[r][c][obs] += dp[r-1][c][obs] when grid[r][c]==0
 
 Address these before writing your implementation.
 ```
 
 ### Layer 2 — BrainAgent (pre-execution, before each tool call)
 
-Before each `python_exec` call, the brain checks the proposed code against stored motifs. The judge must return verbatim quotes from both the task description AND the proposed code. When both are found, a STOP message fires before the bad code runs:
+Before each `write_file` or `python_exec` call, the brain checks the proposed code against stored motifs. The judge must return a verbatim quote from the task AND the verbatim buggy line from the code. When both are found, a STOP message fires with the specific fix before the bad code runs:
 
 ```
 ⚠️ BRAIN:
 STOP: The monitor detected a likely logical failure before execution.
 
-Evidence (Learned pattern: Retry Logic Does Not Differentiate Retryable Errors):
-  - Requirement: Only retry exceptions listed in retry_on.
-  - Violation:   except retry_on as e:
-  - Explanation: code retries unconditionally instead of checking type
+Evidence (Learned pattern: Incorrect DP obstacle handling logic):
+  - Requirement: pass through EXACTLY k obstacle cells (marked 1)
+  - Bug found:   dp[r][c][obstacles] += (dp[r-1][c][obstacles-1] if r > 0 else 0)
+  - Why:         adds paths without decrementing obstacle counter when cell is obstacle
 
-Required correction:
-  check exception type or status code before retrying
+Fix for this specific code:
+  Change dp[r][c][obs] += dp[r-1][c][obs-1] to dp[r][c][obs] += dp[r-1][c][obs]
+  when grid[r][c]==0; use obs-1 index only when grid[r][c]==1
 
-Revise the code before calling the tool again.
+General pattern fix:
+  DP update must index dp[row][col][count-1] when consuming a constrained resource
+
+Rewrite the code to apply the fix above before calling the tool again.
 ```
+
+The brain intercepts `write_file` (the implementation file) rather than waiting for `python_exec` (the test harness). This means the buggy DP logic is caught before the file is even saved to disk.
 
 Both layers share the same motif store. A motif learned mid-execution is immediately available for pre-prompt injection on the next task.
 
@@ -120,9 +126,9 @@ The gate requires:
 - Confidence ≥ threshold (0.80 for execution-time, 0.70 for pre-prompt)
 - Both quotes non-empty and not vague (`"task implies"`, `"likely"`, `"might"`, etc.)
 - `requirement_quote` is a verbatim substring of the actual task text (or ≥70% word overlap)
-- `violation_quote` is a verbatim substring of the actual proposed code (or ≥70% word overlap)
+- `violation_quote` is a verbatim substring of the actual proposed code (or ≥40% word overlap for code-like strings where variable names legitimately differ)
 
-**Cross-domain contamination is structurally impossible.** A retry motif requires quoting the phrase "retry" from the task text — that phrase will not appear in a sort task. No similarity threshold to tune; the predicate either holds or it does not.
+**Cross-domain contamination is structurally impossible.** A DP obstacle motif requires quoting the phrase "EXACTLY k obstacle" from the task text — that phrase will not appear in a sort task. No similarity threshold to tune; the predicate either holds or it does not.
 
 Result: **0% false positives on 16 near-miss tasks** across 8 failure families in the cold-start benchmark.
 
@@ -149,7 +155,7 @@ export OPENAI_API_KEY=sk-proj-...     # uses gpt-4o-mini (agent) + gpt-4o (judge
 ```python
 from trace_use import (
     BrainAgent, PersistentMotifStore, TrajectoryDetector,
-    BrainConfig, build_embedder, tool_agent,
+    BrainConfig, build_embedder, openai_tool_agent,
 )
 
 embedder = build_embedder()
@@ -157,7 +163,8 @@ store    = PersistentMotifStore(embedder)           # loads ~/.trace_use/motifs.
 detector = TrajectoryDetector(store, embedder)      # pre-task injection
 brain    = BrainAgent(embedder, motif_store=store)  # mid-execution interception
 
-agent         = tool_agent(["python_exec"], max_turns=8)
+# OpenAI agent with write_file + python_exec tools, 60s API timeout
+agent         = openai_tool_agent(["python_exec", "write_file"], max_turns=8)
 agent.monitor = brain
 
 for i, task in enumerate(tasks):
@@ -186,6 +193,19 @@ python demo_session.py --show    # list all stored motifs
 python demo_session.py --clear   # wipe motif store
 python demo_session.py --store ./my_project.json   # project-specific store
 ```
+
+---
+
+## Tools
+
+The agent has access to two persistent tools:
+
+| Tool | Description |
+|---|---|
+| `write_file(path, content)` | Writes a file to `~/.trace_use/workspace/`. The workspace persists across turns and sessions and is added to `sys.path` so written modules can be imported. |
+| `python_exec(code)` | Runs code in a fresh subprocess (30s timeout). Each call starts a clean Python process — no stale module cache, no risk of hanging on blocking calls. |
+
+The brain intercepts both: `write_file` is checked when the agent writes the implementation, `python_exec` is checked when it runs a test harness.
 
 ---
 
@@ -286,7 +306,7 @@ Run: `gpt-4o-mini` agent, `gpt-4o` judge, OpenAI embeddings.
 [16/56] retry_on_type   retry_classification   | PASS [FIRED] | 13.4s
 ```
 
-The agent wrote `except retry_on as e:` — iterating the list as a catch-all instead of checking type membership. The brain caught this, injected a STOP, the agent corrected the code, and the task passed.
+The agent wrote `except retry_on as e:` — iterating the list as a catch-all instead of checking type membership. The brain caught this, injected a STOP with the specific corrected line, the agent fixed the code, and the task passed.
 
 **Where it didn't fire:**
 
@@ -310,8 +330,9 @@ Task 3 (rolling statistics) failed: the agent computed `returns.rolling(window).
 | `trace_use/trajectory.py` | `TrajectoryDetector`, `MotifMatch` — pre-task pre-prompt injection |
 | `trace_use/motif_store.py` | `PersistentMotifStore` — JSON-backed cross-session persistence |
 | `trace_use/config.py` | `BrainConfig`, `DetectorConfig` — all tunable constants |
-| `trace_use/agents.py` | `tool_agent`, `haiku`, `opus`, `build_embedder`, `_llm_call` |
-| `demo_session.py` | Interactive TUI: inspect trajectory detection, teach the system |
+| `trace_use/agents.py` | `tool_agent`, `openai_tool_agent`, `haiku`, `opus`, `build_embedder`, `_llm_call` |
+| `trace_use/tools.py` | `python_exec`, `write_file`, `calculator`, `wikipedia_search` — built-in agent tools |
+| `demo_session.py` | Interactive TUI: run tasks with the agent, inspect motif learning live |
 | `eval/eval_dev_learning.py` | 56-task cold-start learning benchmark (supports Anthropic + OpenAI) |
 | `eval/eval_project.py` | 15-task portfolio risk analyzer session |
 | `eval/eval_real_world.py` | 30 hard tasks |
@@ -327,7 +348,7 @@ Task 3 (rolling statistics) failed: the agent computed `returns.rolling(window).
 - **Embedding retrieval is coarse.** Cosine similarity between abstract motif descriptions and short task prompts can be low (~0.05–0.10 with OpenAI embeddings). Motifs with similarity below `retrieval_min_sim` never reach the judge. Effective when task text and motif description share vocabulary; weaker for terse prompts.
 - **Judge model matters for quote compliance.** Smaller models (gpt-4o-mini, Haiku) paraphrase instead of copy-pasting verbatim quotes — the grounding check rejects these. Use a stronger model (gpt-4o, claude-sonnet) for the judge when accuracy matters.
 - **Most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare. Below ~60%, the model likely needs a fundamentally different approach rather than mid-turn correction.
-- **Motif quality depends on extraction.** If the extraction LLM produces a motif with task-specific field names in `required_condition`, it will fail to generalize to surface-different recurrences.
+- **Motif quality depends on extraction.** If the extraction LLM produces a motif with vague `required_condition` text (e.g. "task requires dynamic programming" instead of "EXACTLY k obstacle"), it will fail to match future tasks. The extraction prompt enforces literal task phrases, but extraction quality varies by model.
 
 ---
 
