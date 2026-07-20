@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trace-use"
 version = "0.1.2"
-description = "Forecast agent failure from execution traces — spend retries and verification only where needed."
+description = "Learn failure patterns from LLM agent traces and intercept recurrences before they execute."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

@@ -1,5 +1,6 @@
 README.md
 pyproject.toml
+tests/test_brain.py
 tests/test_forecast.py
 tests/test_pipeline.py
 trace_use/__init__.py
