@@ -314,22 +314,3 @@ Task 3 (rolling statistics) failed: the agent computed `returns.rolling(window).
 | `eval/results/` | JSON run logs |
 | `tests/test_brain.py` | BrainAgent unit tests (offline, stubbed) |
 | `tests/test_trajectory.py` | TrajectoryDetector + developer week simulation (offline, stubbed) |
-
----
-
-## Limitations
-
-- **Cannot prevent the first occurrence.** The brain learns from failure — it cannot warn about something it has never seen. Seed the store manually with `:seed` in `demo_session.py` for known failure modes.
-- **Embedding retrieval is coarse.** Cosine similarity between abstract motif descriptions and short task prompts can be low (~0.05–0.10 with OpenAI embeddings). Motifs with similarity below `retrieval_min_sim` never reach the judge. Effective when task text and motif description share vocabulary; weaker for terse prompts.
-- **Judge model matters for quote compliance.** Smaller models (gpt-4o-mini, Haiku) paraphrase instead of copy-pasting verbatim quotes — the grounding check rejects these. Use a stronger model (gpt-4o, claude-sonnet) for the judge when accuracy matters.
-- **Most impactful in the 15–40% failure band.** Above ~90% pass rate, fires are rare. Below ~60%, the model likely needs a fundamentally different approach rather than mid-turn correction.
-- **Motif quality depends on extraction.** If the extraction LLM produces a motif with vague `required_condition` text (e.g. "task requires dynamic programming" instead of "EXACTLY k obstacle"), it will fail to match future tasks. The extraction prompt enforces literal task phrases, but extraction quality varies by model.
-
----
-
-## Negative results
-
-- **kNN trajectory scoring produced false positives.** Embedding-based `p_fail` scores (earlier versions) caused cross-domain contamination. Removed entirely. The verbatim-quote grounding requirement eliminates this class of error.
-- **`eval_extensive` fires didn't help.** 5 fires, 0 tasks fixed. Motif correction works for localized logical errors, not wrong algorithmic approaches.
-- **GSM8K is too easy.** Models solve grade-school math at >95% — nothing to learn from.
-- **Intervention is failure-rate-dependent.** When pass rate is above 90%, the store fills slowly and motifs stay sparse. The system adds value most when there is a recurring failure class to learn from.
